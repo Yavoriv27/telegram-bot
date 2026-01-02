@@ -1,17 +1,9 @@
-import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import time
 
-TOKEN = os.getenv("8490611446:AAFZwLYoVEJrsvtapZKY4NcX8XBtHIoC4Oo")
+TOKEN = None
+while not TOKEN:
+    TOKEN = os.getenv("BOT_TOKEN")
+    if not TOKEN:
+        print("Waiting for BOT_TOKEN...")
+        time.sleep(2)
 
-if not TOKEN:
-    raise RuntimeError("BOT_TOKEN не заданий")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот запущений і працює ✅")
-
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-
-print("Bot started")
-app.run_polling()
