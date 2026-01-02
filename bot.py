@@ -283,63 +283,25 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN / BOT_TOKEN missing")
 
-    # запуск OANDA стріму (як у тебе було)
     ENGINE.start_stream()
 
     app = Application.builder().token(token).build()
 
-# ---------- TELEGRAM COMMANDS ----------
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("signal", cmd_signal))
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "✅ Бот запущено.\n\n"
-        "Команди:\n"
-        "/status — стан ринку\n"
-        "/signal — сигнал зараз\n"
-        "/auto_on — авто ON\n"
-        "/auto_off — авто OFF\n"
-        "/subscribe — підписка\n"
-        "/unsubscribe — відписка\n"
-        "/subs — підписники"
-    )
+    app.add_handler(CommandHandler("auto_on", cmd_auto_on))
+    app.add_handler(CommandHandler("auto_off", cmd_auto_off))
 
-async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Статус: бот працює")
-
-async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sig = ENGINE.compute_signal()
-    await update.message.reply_text(fmt_signal(sig), parse_mode=ParseMode.HTML)
-
-async def cmd_auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ENGINE.auto_enabled = True
-    await update.message.reply_text("🔔 Автосигнали УВІМКНЕНО")
-
-async def cmd_auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ENGINE.auto_enabled = False
-    await update.message.reply_text("⛔ Автосигнали ВИМКНЕНО")
-
-async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    SUBS.add(update.effective_chat.id)
-    await update.message.reply_text("✅ Підписка активна")
-
-async def cmd_unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    SUBS.remove(update.effective_chat.id)
-    await update.message.reply_text("❌ Підписка скасована")
-
-async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"👥 Підписників: {len(SUBS.list())}")
-
-    # -------- AUTO SIGNAL JOB --------
-    app.job_queue.run_repeating(
-        auto_job,
-        interval=ENGINE.auto_every_sec,  # 300 сек (5 хв)
-        first=15,
-        name="auto_signal_job"
-    )
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
+    app.add_handler(CommandHandler("subs", cmd_subs))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
+
 
