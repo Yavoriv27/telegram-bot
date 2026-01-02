@@ -430,22 +430,24 @@ class SignalEngine:
         self.symbol = os.getenv("SYMBOL", "EUR_USD")
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
-        self.min_conf = int(os.getenv("MIN_CONF", "88"))
+        self.min_conf = int(os.getenv("MIN_CONF", "75"))
+
+        self.tf1 = 60
+        self.tf5 = 300
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
 
-        # === ОБОВʼЯЗКОВІ ІНІЦІАЛІЗАЦІЇ ===
-        self.builder_1m = InternalCandleBuilder(60)
-        self.builder_5m = InternalCandleBuilder(300)
+        self.builder_1m = InternalCandleBuilder(self.tf1)
+        self.builder_5m = InternalCandleBuilder(self.tf5)
 
         self.hist_1m = CandleHistory(maxlen=400)
         self.hist_5m = CandleHistory(maxlen=400)
 
-        self._last_closed_1m_ts: Optional[float] = None
-        self._last_closed_5m_ts: Optional[float] = None
+        self._last_closed_1m_ts = None
+        self._last_closed_5m_ts = None
 
-        self.last_tick: Optional[Dict[str, float]] = None
+        self.last_tick = None
         self.news = NewsLock()
 
         self._stream = None
