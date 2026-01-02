@@ -825,17 +825,24 @@ def main():
 
     app = Application.builder().token(token).build()
 
-    app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("signal", cmd_signal))
+
     app.add_handler(CommandHandler("auto_on", cmd_auto_on))
     app.add_handler(CommandHandler("auto_off", cmd_auto_off))
+
     app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("subs", cmd_subs))
 
-    app.job_queue.run_repeating(auto_job, interval=ENGINE.auto_every_sec, first=10, name="auto_job")
+    app.job_queue.run_repeating(
+        auto_job,
+        interval=ENGINE.auto_every_sec,
+        first=10,
+        name="auto_job"
+    )
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
