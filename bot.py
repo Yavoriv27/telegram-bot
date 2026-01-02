@@ -258,23 +258,57 @@ class SignalEngine:
 ENGINE = SignalEngine()
 SUBS = Subscribers("/app/subscribers.json")
 
-# ---------------- TELEGRAM ----------------
+# ---------------- TELEGRAM COMMANDS ----------------
 
-async def start_cmd(update: Update, ctx):
-    await update.message.reply_text("✅ Бот запущено")
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✅ Бот запущено.\n\n"
+        "Команди:\n"
+        "/status — стан ринку\n"
+        "/signal — сигнал зараз\n"
+        "/auto_on — авто ON\n"
+        "/auto_off — авто OFF\n"
+        "/subscribe — підписка\n"
+        "/unsubscribe — відписка\n"
+        "/subs — кількість підписників"
+    )
 
-async def subscribe_cmd(update: Update, ctx):
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    snap = ENGINE.snapshot()
+    await update.message.reply_text(
+        f"📊 Статус:\n"
+        f"1M свічок: {len(snap['h1'])}\n"
+        f"5M свічок: {len(snap['h5'])}\n"
+        f"Авто: {'ON' if ENGINE.auto_enabled else 'OFF'}"
+    )
+
+async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sig = ENGINE.compute_signal()
+    await update.message.reply_text(fmt_signal(sig), parse_mode=ParseMode.HTML)
+
+async def cmd_auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ENGINE.auto_enabled = True
+    await update.message.reply_text("✅ Автосигнали УВІМКНЕНО")
+
+async def cmd_auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ENGINE.auto_enabled = False
+    await update.message.reply_text("⛔ Автосигнали ВИМКНЕНО")
+
+async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SUBS.add(update.effective_chat.id):
-        await update.message.reply_text("✅ Підписано")
+        await update.message.reply_text("✅ Підписано на автосигнали")
     else:
-        await update.message.reply_text("ℹ️ Вже підписаний")
+        await update.message.reply_text("ℹ️ Ви вже підписані")
 
-async def signal_cmd(update: Update, ctx):
-    sig = ENGINE.compute()
-    if not sig:
-        await update.message.reply_text("⚠️ Немає сигналу")
+async def cmd_unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if SUBS.remove(update.effective_chat.id):
+        await update.message.reply_text("❌ Відписано")
     else:
-        await update.message.reply_text(f"📈 {sig} EUR/USD", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("ℹ️ Ви не були підписані")
+
+async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"👥 Підписників: {len(SUBS.list())}")
+
 
 # ---------------- MAIN ----------------
 
@@ -287,23 +321,19 @@ def main():
 
     app = Application.builder().token(token).build()
 
-    # ---- Telegram commands (ВАЖЛИВО: імена 1:1) ----
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("subscribe", subscribe_cmd))
-    app.add_handler(CommandHandler("signal", signal_cmd))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("signal", cmd_signal))
 
-    # якщо ПОКИ що цих команд нема — НЕ ДОДАВАЙ
-    # app.add_handler(CommandHandler("status", status_cmd))
-    # app.add_handler(CommandHandler("auto_on", auto_on_cmd))
-    # app.add_handler(CommandHandler("auto_off", auto_off_cmd))
-    # app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
-    # app.add_handler(CommandHandler("subs", subs_cmd))
+    app.add_handler(CommandHandler("auto_on", cmd_auto_on))
+    app.add_handler(CommandHandler("auto_off", cmd_auto_off))
+
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
+    app.add_handler(CommandHandler("subs", cmd_subs))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
-
-
-
