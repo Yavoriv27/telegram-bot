@@ -287,29 +287,23 @@ def main():
 
     app = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("signal", cmd_signal))
+    # ---- Telegram commands (ВАЖЛИВО: імена 1:1) ----
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("subscribe", subscribe_cmd))
+    app.add_handler(CommandHandler("signal", signal_cmd))
 
-    app.add_handler(CommandHandler("auto_on", cmd_auto_on))
-    app.add_handler(CommandHandler("auto_off", cmd_auto_off))
-
-    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
-    app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
-    app.add_handler(CommandHandler("subs", cmd_subs))
-
-    # ✅ АВТОСИГНАЛИ (тільки сильні)
-    app.job_queue.run_repeating(
-        auto_job,
-        interval=ENGINE.auto_every_sec,
-        first=30,
-        name="auto_signal_job"
-    )
+    # якщо ПОКИ що цих команд нема — НЕ ДОДАВАЙ
+    # app.add_handler(CommandHandler("status", status_cmd))
+    # app.add_handler(CommandHandler("auto_on", auto_on_cmd))
+    # app.add_handler(CommandHandler("auto_off", auto_off_cmd))
+    # app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
+    # app.add_handler(CommandHandler("subs", subs_cmd))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
+
 
 
