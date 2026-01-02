@@ -432,47 +432,33 @@ class SignalEngine:
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
         self.min_conf = int(os.getenv("MIN_CONF", "75"))
 
-        self.tf1 = int(os.getenv("CANDLE_TF_1M_SEC", "60"))
-        self.tf5 = int(os.getenv("CANDLE_TF_5M_SEC", "300"))
-
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
-
-        self.builder_1m = InternalCandleBuilder(self.tf1)
-        self.builder_5m = InternalCandleBuilder(self.tf5)
-
-        self.hist_1m = CandleHistory(maxlen=400)
-        self.hist_5m = CandleHistory(maxlen=400)
-
-        self._last_closed_1m_ts: Optional[float] = None
-        self._last_closed_5m_ts: Optional[float] = None
-
-        self.last_tick: Optional[Dict[str, float]] = None
-        self.news = NewsLock()
-
-        self._stream: Optional[OandaPriceStream] = None
+        self._stream = None
 
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
         account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
         env = (os.getenv("OANDA_ENV") or "practice").strip().lower()
 
-    if not api_key or not account_id:
-        raise RuntimeError("OANDA_API_KEY / OANDA_ACCOUNT_ID missing in Railway variables")
+        if not api_key or not account_id:
+            raise RuntimeError(
+                "OANDA_API_KEY / OANDA_ACCOUNT_ID missing in Railway variables"
+            )
 
-    practice = (env == "practice")
+        practice = env == "practice"
 
-    self._stream = OandaPriceStream(
-        api_key=api_key,
-        account_id=account_id,
-        instrument=self.symbol,
-        out_q=self._q,
-        practice=practice
-    )
-    self._stream.start()
+        self._stream = OandaPriceStream(
+            api_key=api_key,
+            account_id=account_id,
+            instrument=self.symbol,
+            out_q=self._q,
+            practice=practice,
+        )
+        self._stream.start()
 
-    t = threading.Thread(target=self._pump_ticks, daemon=True)
-    t.start()
+        t = threading.Thread(target=self._pump_ticks, daemon=True)
+        t.start()
 
 
     def _pump_ticks(self):
