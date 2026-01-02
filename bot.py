@@ -1,9 +1,12 @@
 import os
 import time
 
-TOKEN = None
-while not TOKEN:
-    TOKEN = os.getenv("BOT_TOKEN", "").strip('"')
-    if not TOKEN:
-        print("Waiting for BOT_TOKEN...")
-        time.sleep(2)
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN не заданий")
+
+print("BOT TOKEN OK, starting bot...")
+
+while True:
+    time.sleep(60)
