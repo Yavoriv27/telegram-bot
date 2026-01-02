@@ -434,7 +434,22 @@ class SignalEngine:
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
+
+        # === ОБОВʼЯЗКОВІ ІНІЦІАЛІЗАЦІЇ ===
+        self.builder_1m = InternalCandleBuilder(60)
+        self.builder_5m = InternalCandleBuilder(300)
+
+        self.hist_1m = CandleHistory(maxlen=400)
+        self.hist_5m = CandleHistory(maxlen=400)
+
+        self._last_closed_1m_ts: Optional[float] = None
+        self._last_closed_5m_ts: Optional[float] = None
+
+        self.last_tick: Optional[Dict[str, float]] = None
+        self.news = NewsLock()
+
         self._stream = None
+
 
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
