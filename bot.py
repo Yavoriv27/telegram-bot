@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any
 
 import requests
 import pytz
+
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -28,13 +29,15 @@ KYIV_TZ = pytz.timezone("Europe/Kyiv")
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-def fmt_kyiv(dt: datetime) -> str:
-    return dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d %H:%M:%S")
+def fmt_kyiv(dt_utc: datetime) -> str:
+    return dt_utc.astimezone(KYIV_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-def mean(xs): return sum(xs) / max(1, len(xs))
+def mean(xs: List[float]) -> float:
+    return sum(xs) / max(1, len(xs))
 
-def stdev(xs):
-    if len(xs) < 2: return 0.0
+def stdev(xs: List[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
     m = mean(xs)
     return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
 
@@ -48,80 +51,134 @@ class Candle:
     high: float
     low: float
     close: float
+    ticks: int = 0
+
+    def update(self, price: float):
+        self.close = price
+        self.high = max(self.high, price)
+        self.low = min(self.low, price)
+        self.ticks += 1
 
     @property
-    def dir(self):
-        if self.close > self.open: return "UP"
-        if self.close < self.open: return "DOWN"
+    def dir(self) -> str:
+        if self.close > self.open:
+            return "UP"
+        if self.close < self.open:
+            return "DOWN"
         return "FLAT"
 
 class InternalCandleBuilder:
-    def __init__(self, tf):
-        self.tf = tf
-        self.current = None
-        self.last_closed = None
+    def __init__(self, tf_sec: int):
+        self.tf_sec = tf_sec
+        self.current: Optional[Candle] = None
+        self.last_closed: Optional[Candle] = None
 
-    def _bucket(self, ts): return ts - (ts % self.tf)
+    def _bucket_start(self, ts: float) -> float:
+        return ts - (ts % self.tf_sec)
 
-    def on_tick(self, ts, price):
-        b = self._bucket(ts)
-        if not self.current:
-            self.current = Candle(self.tf, b, price, price, price, price)
+    def on_tick(self, ts: float, price: float):
+        b = self._bucket_start(ts)
+        if self.current is None:
+            self.current = Candle(self.tf_sec, b, price, price, price, price, ticks=1)
             return
         if b == self.current.start_ts:
-            self.current.close = price
-            self.current.high = max(self.current.high, price)
-            self.current.low = min(self.current.low, price)
-        else:
-            self.last_closed = self.current
-            self.current = Candle(self.tf, b, price, price, price, price)
+            self.current.update(price)
+            return
+        self.last_closed = self.current
+        self.current = Candle(self.tf_sec, b, price, price, price, price, ticks=1)
 
 class CandleHistory:
-    def __init__(self, maxlen=400):
-        self.items = []
+    def __init__(self, maxlen: int = 400):
+        self.maxlen = maxlen
+        self._items: List[Candle] = []
 
-    def add(self, c):
-        self.items.append(c)
-        self.items = self.items[-400:]
+    def append(self, c: Candle):
+        self._items.append(c)
+        if len(self._items) > self.maxlen:
+            self._items = self._items[-self.maxlen:]
+
+    def items(self) -> List[Candle]:
+        return list(self._items)
+
+# ---------------- OANDA STREAM ----------------
+
+class OandaPriceStream(threading.Thread):
+    def __init__(self, api_key, account_id, instrument, out_q, practice=True):
+        super().__init__(daemon=True)
+        self.api_key = api_key
+        self.account_id = account_id
+        self.instrument = instrument
+        self.out_q = out_q
+        self.practice = practice
+
+    def run(self):
+        base = "https://stream-fxpractice.oanda.com" if self.practice else "https://stream-fxtrade.oanda.com"
+        url = f"{base}/v3/accounts/{self.account_id}/pricing/stream"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        params = {"instruments": self.instrument}
+
+        while True:
+            try:
+                with requests.get(url, headers=headers, params=params, stream=True, timeout=30) as r:
+                    r.raise_for_status()
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        msg = json.loads(line.decode())
+                        if msg.get("type") == "PRICE":
+                            bid = float(msg["bids"][0]["price"])
+                            ask = float(msg["asks"][0]["price"])
+                            mid = (bid + ask) / 2
+                            self.out_q.put({
+                                "ts": time.time(),
+                                "bid": bid,
+                                "ask": ask,
+                                "mid": mid
+                            })
+            except Exception as e:
+                log.warning("OANDA stream error: %s", e)
+                time.sleep(5)
 
 # ---------------- INDICATORS ----------------
 
-def ema(vals, p):
-    if len(vals) < p: return None
-    k = 2 / (p + 1)
-    e = mean(vals[:p])
-    for v in vals[p:]: e = v * k + e * (1 - k)
+def ema(values: List[float], period: int):
+    if len(values) < period:
+        return None
+    k = 2 / (period + 1)
+    e = mean(values[:period])
+    for v in values[period:]:
+        e = v * k + e * (1 - k)
     return e
 
-def rsi(vals, p=14):
-    if len(vals) < p + 1: return None
+def rsi(values: List[float], period: int = 14):
+    if len(values) < period + 1:
+        return None
     gains, losses = [], []
-    for i in range(-p, 0):
-        d = vals[i] - vals[i-1]
-        gains.append(max(0, d))
-        losses.append(max(0, -d))
-    if sum(losses) == 0: return 100
-    rs = (sum(gains)/p) / (sum(losses)/p)
+    for i in range(-period, 0):
+        diff = values[i] - values[i - 1]
+        gains.append(max(0, diff))
+        losses.append(max(0, -diff))
+    if sum(losses) == 0:
+        return 100.0
+    rs = (sum(gains) / period) / (sum(losses) / period)
     return 100 - (100 / (1 + rs))
 
-def macd(vals):
-    if len(vals) < 35: return None
-    fast = ema(vals, 12)
-    slow = ema(vals, 26)
-    if fast is None or slow is None: return None
-    hist = fast - slow
-    return hist
+def macd(values: List[float]):
+    if len(values) < 26:
+        return None
+    return ema(values, 12) - ema(values, 26)
 
-def adx(highs, lows, closes, p=14):
-    if len(closes) < p + 1: return None
+def adx(highs, lows, closes, period=14):
+    if len(closes) < period + 1:
+        return None
     trs = []
     for i in range(1, len(closes)):
         trs.append(max(
-            highs[i]-lows[i],
-            abs(highs[i]-closes[i-1]),
-            abs(lows[i]-closes[i-1])
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1])
         ))
-    return mean(trs[-p:])
+    return mean(trs[-period:])
 
 # ---------------- SUBSCRIBERS ----------------
 
@@ -130,62 +187,69 @@ class Subscribers:
         self.path = path
         self.ids = []
         if os.path.exists(path):
-            self.ids = json.load(open(path)).get("ids", [])
-
-    def save(self):
-        json.dump({"ids": self.ids}, open(self.path, "w"))
+            self.ids = json.load(open(path)).get("chat_ids", [])
 
     def add(self, cid):
         if cid not in self.ids:
             self.ids.append(cid)
-            self.save()
+            json.dump({"chat_ids": self.ids}, open(self.path, "w"))
             return True
         return False
 
-    def list(self): return self.ids
+    def list(self):
+        return self.ids
 
 # ---------------- SIGNAL ENGINE ----------------
 
 class SignalEngine:
     def __init__(self):
         self.q = queue.Queue()
-        self.b1 = InternalCandleBuilder(60)
-        self.b5 = InternalCandleBuilder(300)
+        self.builder_1m = InternalCandleBuilder(60)
+        self.builder_5m = InternalCandleBuilder(300)
         self.h1 = CandleHistory()
         self.h5 = CandleHistory()
 
     def start_stream(self):
-        threading.Thread(target=self.fake_stream, daemon=True).start()
+        api_key = os.getenv("OANDA_API_KEY")
+        account_id = os.getenv("OANDA_ACCOUNT_ID")
+        env = os.getenv("OANDA_ENV", "practice")
+        stream = OandaPriceStream(
+            api_key,
+            account_id,
+            "EUR_USD",
+            self.q,
+            practice=(env == "practice")
+        )
+        stream.start()
+        threading.Thread(target=self._pump, daemon=True).start()
 
-    def fake_stream(self):
-        # ЗАМІНА OANDA ДЛЯ СТАРТУ (щоб бот працював)
-        price = 1.1
+    def _pump(self):
         while True:
-            price += (math.sin(time.time()) * 0.00001)
-            ts = time.time()
-            self.b1.on_tick(ts, price)
-            self.b5.on_tick(ts, price)
-            if self.b1.last_closed: self.h1.add(self.b1.last_closed)
-            if self.b5.last_closed: self.h5.add(self.b5.last_closed)
-            time.sleep(1)
+            item = self.q.get()
+            ts = item["ts"]
+            price = item["mid"]
+            self.builder_1m.on_tick(ts, price)
+            self.builder_5m.on_tick(ts, price)
+            if self.builder_1m.last_closed:
+                self.h1.append(self.builder_1m.last_closed)
+            if self.builder_5m.last_closed:
+                self.h5.append(self.builder_5m.last_closed)
 
     def compute(self):
-        if len(self.h5.items) < 50 or len(self.h1.items) < 50:
+        if len(self.h5.items()) < 60:
             return None
-        c1 = self.h1.items
-        c5 = self.h5.items
-        closes5 = [c.close for c in c5]
-        highs5 = [c.high for c in c5]
-        lows5 = [c.low for c in c5]
+        closes = [c.close for c in self.h5.items()]
+        highs = [c.high for c in self.h5.items()]
+        lows = [c.low for c in self.h5.items()]
 
-        buy = sell = 0
-        if ema(closes5,20) > ema(closes5,50): buy += 1
-        if rsi(closes5) > 55: buy += 1
-        if macd(closes5) > 0: buy += 1
-        if adx(highs5,lows5,closes5) > 0: buy += 1
-        if c1[-1].dir == "UP": buy += 1
+        score = 0
+        if ema(closes, 20) > ema(closes, 50): score += 1
+        if rsi(closes) > 55: score += 1
+        if macd(closes) > 0: score += 1
+        if adx(highs, lows, closes) > 0: score += 1
+        if self.h1.items()[-1].dir == "UP": score += 1
 
-        if buy >= 4:
+        if score >= 4:
             return "BUY"
         return None
 
@@ -196,21 +260,21 @@ SUBS = Subscribers("/app/subscribers.json")
 
 # ---------------- TELEGRAM ----------------
 
-async def start(update: Update, ctx):
-    await update.message.reply_text("✅ Бот запущено\n/subscribe /signal")
+async def start_cmd(update: Update, ctx):
+    await update.message.reply_text("✅ Бот запущено")
 
-async def subscribe(update: Update, ctx):
+async def subscribe_cmd(update: Update, ctx):
     if SUBS.add(update.effective_chat.id):
         await update.message.reply_text("✅ Підписано")
     else:
         await update.message.reply_text("ℹ️ Вже підписаний")
 
-async def signal(update: Update, ctx):
-    s = ENGINE.compute()
-    if not s:
+async def signal_cmd(update: Update, ctx):
+    sig = ENGINE.compute()
+    if not sig:
         await update.message.reply_text("⚠️ Немає сигналу")
     else:
-        await update.message.reply_text(f"📈 {s} EUR/USD", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"📈 {sig} EUR/USD", parse_mode=ParseMode.HTML)
 
 # ---------------- MAIN ----------------
 
@@ -222,9 +286,9 @@ def main():
     ENGINE.start_stream()
 
     app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("subscribe", subscribe))
-    app.add_handler(CommandHandler("signal", signal))
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("subscribe", subscribe_cmd))
+    app.add_handler(CommandHandler("signal", signal_cmd))
     app.run_polling()
 
 if __name__ == "__main__":
