@@ -804,11 +804,18 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    token = (
+        os.getenv("TELEGRAM_BOT_TOKEN")
+        or os.getenv("BOT_TOKEN")
+        or ""
+    ).strip()
+
     if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN missing in .env")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN / BOT_TOKEN missing in Railway variables")
 
     ENGINE.start_stream()
+
+    app = Application.builder().token(token).build()
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
