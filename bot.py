@@ -458,7 +458,7 @@ class SignalEngine:
         env = (os.getenv("OANDA_ENV") or "practice").strip().lower()
 
         if not api_key or not account_id:
-            raise RuntimeError("OANDA creds missing in .env (OANDA_API_KEY / OANDA_ACCOUNT_ID)")
+    raise RuntimeError("OANDA_API_KEY / OANDA_ACCOUNT_ID missing in Railway variables")
 
         practice = (env == "practice")
         self._stream = OandaPriceStream(api_key, account_id, self.symbol, self._q, practice=practice)
