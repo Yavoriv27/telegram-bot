@@ -283,10 +283,12 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN / BOT_TOKEN missing")
 
+    # запуск OANDA стріму (як у тебе було)
     ENGINE.start_stream()
 
     app = Application.builder().token(token).build()
 
+    # -------- COMMANDS --------
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("signal", cmd_signal))
@@ -298,8 +300,17 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("subs", cmd_subs))
 
+    # -------- AUTO SIGNAL JOB --------
+    app.job_queue.run_repeating(
+        auto_job,
+        interval=ENGINE.auto_every_sec,  # 300 сек (5 хв)
+        first=15,
+        name="auto_signal_job"
+    )
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
+
