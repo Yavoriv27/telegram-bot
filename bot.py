@@ -279,9 +279,9 @@ async def signal_cmd(update: Update, ctx):
 # ---------------- MAIN ----------------
 
 def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
     if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN missing")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN / BOT_TOKEN missing")
 
     ENGINE.start_stream()
 
