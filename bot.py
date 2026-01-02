@@ -440,6 +440,9 @@ class SignalEngine:
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
         account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
         env = (os.getenv("OANDA_ENV") or "practice").strip().lower()
+        
+        print("DEBUG KEY =", repr(os.getenv("OANDA_API_KEY")))
+        print("DEBUG ACC =", repr(os.getenv("OANDA_ACCOUNT_ID")))
 
         if not api_key or not account_id:
             raise RuntimeError(
