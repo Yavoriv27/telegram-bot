@@ -298,6 +298,14 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("subs", cmd_subs))
 
+    # ✅ АВТОСИГНАЛИ (тільки сильні)
+    app.job_queue.run_repeating(
+        auto_job,
+        interval=ENGINE.auto_every_sec,
+        first=30,
+        name="auto_signal_job"
+    )
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
