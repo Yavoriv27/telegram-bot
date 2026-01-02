@@ -653,7 +653,7 @@ class SignalEngine:
 
 ENGINE = SignalEngine()
 
-SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/home/ec2-user/subscribers.json"))
+SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 
 
 def fmt_signal(sig: Dict[str, Any]) -> str:
