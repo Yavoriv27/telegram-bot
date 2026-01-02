@@ -286,10 +286,20 @@ def main():
     ENGINE.start_stream()
 
     app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("subscribe", subscribe_cmd))
-    app.add_handler(CommandHandler("signal", signal_cmd))
-    app.run_polling()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("signal", cmd_signal))
+
+    app.add_handler(CommandHandler("auto_on", cmd_auto_on))
+    app.add_handler(CommandHandler("auto_off", cmd_auto_off))
+
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
+    app.add_handler(CommandHandler("subs", cmd_subs))
+
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
