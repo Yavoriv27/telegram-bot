@@ -428,6 +428,7 @@ class Subscribers:
 class SignalEngine:
     def __init__(self):
         self.symbol = "EUR_USD"
+
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
         self.min_conf = int(os.getenv("MIN_CONF", "88"))
@@ -451,6 +452,7 @@ class SignalEngine:
         self.news = NewsLock()
 
         self._stream = None
+
 
 
     def start_stream(self):
