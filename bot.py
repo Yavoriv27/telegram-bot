@@ -453,9 +453,9 @@ class SignalEngine:
         self._stream: Optional[OandaPriceStream] = None
 
     def start_stream(self):
-    api_key = (os.getenv("OANDA_API_KEY") or "").strip()
-    account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
-    env = (os.getenv("OANDA_ENV") or "practice").strip().lower()
+        api_key = (os.getenv("OANDA_API_KEY") or "").strip()
+        account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
+        env = (os.getenv("OANDA_ENV") or "practice").strip().lower()
 
     if not api_key or not account_id:
         raise RuntimeError("OANDA_API_KEY / OANDA_ACCOUNT_ID missing in Railway variables")
