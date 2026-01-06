@@ -354,9 +354,50 @@ class SignalEngine:
             "adx": adx_v
         }
 
+# ---------------- SUBSCRIBERS ----------------
+
+class Subscribers:
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.Lock()
+        self._ids = []
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(self.path):
+                with open(self.path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._ids = list(set(data.get("chat_ids", [])))
+        except Exception:
+            self._ids = []
+
+    def _save(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"chat_ids": self._ids}, f)
+
+    def add(self, chat_id: int) -> bool:
+        with self._lock:
+            if chat_id in self._ids:
+                return False
+            self._ids.append(chat_id)
+            self._save()
+            return True
+
+    def remove(self, chat_id: int) -> bool:
+        with self._lock:
+            if chat_id not in self._ids:
+                return False
+            self._ids.remove(chat_id)
+            self._save()
+            return True
+
+    def list(self):
+        return list(self._ids)
 
 ENGINE = SignalEngine()
 SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
+
 # ---------------- TELEGRAM TEXT FORMAT ----------------
 
 def fmt_signal(sig: Dict[str, Any]) -> str:
@@ -391,50 +432,6 @@ def fmt_signal(sig: Dict[str, Any]) -> str:
         f"<b>ADX(14):</b> {sig.get('adx'):.1f}"
     )
 
-# ---------------- SUBSCRIBERS ----------------
-
-class Subscribers:
-    def __init__(self, path: str):
-        self.path = path
-        self._lock = threading.Lock()
-        self._ids = []
-        self._load()
-
-    def _load(self):
-        try:
-            if os.path.exists(self.path):
-                with open(self.path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self._ids = list(set(data.get("chat_ids", [])))
-        except Exception as e:
-            print("SUBS LOAD ERROR:", e)
-            self._ids = []
-
-    def _save(self):
-        try:
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump({"chat_ids": self._ids}, f)
-        except Exception as e:
-            print("SUBS SAVE ERROR:", e)
-
-    def add(self, chat_id: int) -> bool:
-        with self._lock:
-            if chat_id in self._ids:
-                return False
-            self._ids.append(chat_id)
-            self._save()
-            return True
-
-    def remove(self, chat_id: int) -> bool:
-        with self._lock:
-            if chat_id not in self._ids:
-                return False
-            self._ids.remove(chat_id)
-            self._save()
-            return True
-
-    def list(self):
-        return list(self._ids)
 
 # ---------------- COMMANDS ----------------
 
