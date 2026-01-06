@@ -755,6 +755,15 @@ def build_signal_text(
         + "\n".join(f"• {d}" for d in details)
         + f"\n\n<b>Підтвердження (логіка):</b>\n{used_txt}"
     )
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 Бот запущений.\n\n"
+        "Доступні команди:\n"
+        "/start — запуск\n"
+        "/status — статус\n"
+        "/signal — отримати сигнал",
+        disable_web_page_preview=True
+    )
 
 
 
