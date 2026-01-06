@@ -705,54 +705,57 @@ def fmt_signal(sig: Dict[str, Any]) -> str:
 
     details = []
 
-if ema20_v is not None and ema50_v is not None:
-    details.append(f"EMA20/50: {ema20_v:.5f} / {ema50_v:.5f}")
+def build_signal_text(
+    arrow, action, t, conf, risk,
+    ema20_v, ema50_v,
+    rsi_v, macd_v, adx_v, bb,
+    used
+):
+    details = []
 
-if rsi_v is not None:
-    if rsi_v > 72:
-        details.append(f"❌ <b>RSI(14): {rsi_v:.1f} — НЕ ВХОДИТИ</b>")
-    else:
-        details.append(f"<b>RSI(14): {rsi_v:.1f}</b>")
+    if ema20_v is not None and ema50_v is not None:
+        details.append(f"EMA20/50: {ema20_v:.5f} / {ema50_v:.5f}")
 
-if macd_v:
-    details.append(f"MACD hist: {macd_v['hist']:.6f}")
+    if rsi_v is not None:
+        if rsi_v > 72:
+            details.append(f"❌ <b>RSI(14): {rsi_v:.1f} — НЕ ВХОДИТИ</b>")
+        else:
+            details.append(f"<b>RSI(14): {rsi_v:.1f}</b>")
 
-if adx_v is not None:
-    if adx_v > 35:
-        details.append(f"❌ <b>ADX(14): {adx_v:.1f} — НЕ ВХОДИТИ</b>")
-    else:
-        details.append(f"<b>ADX(14): {adx_v:.1f}</b>")
+    if macd_v:
+        details.append(f"MACD hist: {macd_v['hist']:.6f}")
 
-if bb:
-    details.append(f"BB mid: {bb['mid']:.5f}")
+    if adx_v is not None:
+        if adx_v > 35:
+            details.append(f"❌ <b>ADX(14): {adx_v:.1f} — НЕ ВХОДИТИ</b>")
+        else:
+            details.append(f"<b>ADX(14): {adx_v:.1f}</b>")
 
-    used_txt = "\n".join(f"• {u}" for u in used[:10]) if used else "• —"
+    if bb:
+        details.append(f"BB mid: {bb['mid']:.5f}")
 
-    tip = "🔔 Рекомендовано входити негайно" if conf >= 85 and risk <= 30 else "⏳ Краще дочекатися закриття свічки"
+    used_txt = "\n".join(f"• {u}" for u in used[:10]) if used else "—"
+
+    tip = (
+        "🔔 Рекомендовано входити негайно"
+        if conf >= 85 and risk <= 30 and not (
+            (rsi_v is not None and rsi_v > 72) or
+            (adx_v is not None and adx_v > 35)
+        )
+        else "❌ ПРОПУСТИТИ УГОДУ"
+    )
 
     return (
         f"{arrow} <b>{action} EUR/USD</b>\n"
         f"🕒 <b>Kyiv:</b> {t}\n"
         f"📊 <b>Підтвердження:</b> {conf}%\n"
         f"⚠️ <b>Ризик:</b> {risk}%\n"
-        f"{tip}\n"
-        f"\n<b>Індикатори (5m):</b>\n" + "\n".join(f"• {d}" for d in details) +
-        f"\n\n<b>Підтвердження (логіка):</b>\n{used_txt}"
+        f"{tip}\n\n"
+        f"<b>Індикатори (5m):</b>\n"
+        + "\n".join(f"• {d}" for d in details)
+        + f"\n\n<b>Підтвердження (логіка):</b>\n{used_txt}"
     )
 
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "✅ Бот запущено.\n\n"
-        "Команди:\n"
-        "/status — стан ринку/свічок\n"
-        "/signal — сигнал зараз\n"
-        "/auto_on — авто ON\n"
-        "/auto_off — авто OFF\n"
-        "/subscribe — отримувати автосигнали (для брата теж)\n"
-        "/unsubscribe — відписатися\n"
-        "/subs — список підписників (count)\n"
-    )
     await update.message.reply_text(msg)
 
 
