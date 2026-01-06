@@ -730,7 +730,7 @@ def build_signal_text(
             details.append(f"❌ <b>ADX(14): {adx_v:.1f} — НЕ ВХОДИТИ</b>")
         else:
             details.append(f"<b>ADX(14): {adx_v:.1f}</b>")
-
+            
     if bb:
         details.append(f"BB mid: {bb['mid']:.5f}")
 
