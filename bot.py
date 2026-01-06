@@ -704,22 +704,27 @@ def fmt_signal(sig: Dict[str, Any]) -> str:
     ema50_v = p5.get("ema50")
 
     details = []
-    if ema20_v is not None and ema50_v is not None:
-        details.append(f"EMA20/50: {ema20_v:.5f} / {ema50_v:.5f}")
-    if rsi_v is not None:
+
+if ema20_v is not None and ema50_v is not None:
+    details.append(f"EMA20/50: {ema20_v:.5f} / {ema50_v:.5f}")
+
+if rsi_v is not None:
     if rsi_v > 72:
-        details.append(f"🚫 <b>RSI(14): {rsi_v:.1f} — НЕ ВХОДИТИ</b>")
+        details.append(f"❌ <b>RSI(14): {rsi_v:.1f} — НЕ ВХОДИТИ</b>")
     else:
         details.append(f"<b>RSI(14): {rsi_v:.1f}</b>")
-    if macd_v:
-        details.append(f"MACD hist: {macd_v['hist']:.6f}")
-    if adx_v is not None:
+
+if macd_v:
+    details.append(f"MACD hist: {macd_v['hist']:.6f}")
+
+if adx_v is not None:
     if adx_v > 35:
-        details.append(f"🚫 <b>ADX(14): {adx_v:.1f} — НЕ ВХОДИТИ</b>")
+        details.append(f"❌ <b>ADX(14): {adx_v:.1f} — НЕ ВХОДИТИ</b>")
     else:
         details.append(f"<b>ADX(14): {adx_v:.1f}</b>")
-    if bb:
-        details.append(f"BB mid: {bb['mid']:.5f}")
+
+if bb:
+    details.append(f"BB mid: {bb['mid']:.5f}")
 
     used_txt = "\n".join(f"• {u}" for u in used[:10]) if used else "• —"
 
