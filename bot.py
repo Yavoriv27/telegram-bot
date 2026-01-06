@@ -314,7 +314,7 @@ class SignalEngine:
                 "h5": self.hist_5m.items(),
             }
 
-   def compute_signal(self) -> Dict[str, Any]:
+    def compute_signal(self) -> Dict[str, Any]:
     snap = self.snapshot()
     last = snap["last"]
     h1 = snap["h1"]
