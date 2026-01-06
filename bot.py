@@ -243,7 +243,7 @@ class SignalEngine:
 
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
-        self.min_conf = int(os.getenv("MIN_CONF", "85"))
+        self.min_conf = int(os.getenv("MIN_CONF", "88"))
 
         self.tf1 = 60
         self.tf5 = 300
