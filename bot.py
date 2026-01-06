@@ -314,46 +314,44 @@ class SignalEngine:
                 "h5": self.hist_5m.items(),
             }
 
-    def compute_signal(self) -> Dict[str, Any]:
-        snap = self.snapshot()
-        last = snap["last"]
-        h1 = snap["h1"]
-        h5 = snap["h5"]
+   def compute_signal(self) -> Dict[str, Any]:
+    snap = self.snapshot()
+    last = snap["last"]
+    h1 = snap["h1"]
+    h5 = snap["h5"]
 
-        if not last or len(h1) < 60 or len(h5) < 60:
-            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+    if not last or len(h1) < 60 or len(h5) < 60:
+        return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-        closes_5m = [c.close for c in h5]
-        highs_5m = [c.high for c in h5]
-        lows_5m = [c.low for c in h5]
+    closes_5m = [c.close for c in h5]
+    highs_5m = [c.high for c in h5]
+    lows_5m = [c.low for c in h5]
 
-        rsi_v = rsi(closes_5m, 14)
-        adx_v = adx(highs_5m, lows_5m, closes_5m, 14)
+    rsi_v = rsi(closes_5m, 14)
+    adx_v = adx(highs_5m, lows_5m, closes_5m, 14)
 
-        # === BUY ONLY (2 хв) ===
+    # === BUY ONLY (2 хв) ===
 
-        if rsi_v is None or adx_v is None:
-            return {"ok": False, "reason": "NO_DATA"}
+    if rsi_v is None or adx_v is None:
+        return {"ok": False, "reason": "NO_DATA"}
 
-        # ❌ перекупленість
-        if rsi_v > 70:
-            return {"ok": False, "reason": "RSI_TOO_HIGH"}
+    if rsi_v > 70:
+        return {"ok": False, "reason": "RSI_TOO_HIGH"}
 
-        # ❌ флет або перегрів
-        if adx_v < 20 or adx_v > 30:
-            return {"ok": False, "reason": "ADX_NOT_OK"}
+    if adx_v < 20 or adx_v > 30:
+        return {"ok": False, "reason": "ADX_NOT_OK"}
 
-        # 🔼 BUY
-        if 55 <= rsi_v <= 70:
-            return {
-                "ok": True,
-                "direction": "BUY",
-                "expiry_sec": 120,
-                "rsi": rsi_v,
-                "adx": adx_v
-    }
+    if 55 <= rsi_v <= 70:
+        return {
+            "ok": True,
+            "direction": "BUY",
+            "expiry_sec": 120,
+            "rsi": rsi_v,
+            "adx": adx_v
+        }
 
-return {"ok": False, "reason": "NO_BUY"}
+    return {"ok": False, "reason": "NO_BUY"}
+
 
 
 # ---------------- SUBSCRIBERS ----------------
