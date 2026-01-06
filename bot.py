@@ -330,29 +330,31 @@ class SignalEngine:
         rsi_v = rsi(closes_5m, 14)
         adx_v = adx(highs_5m, lows_5m, closes_5m, 14)
 
-        # ❗ ФІЛЬТР, ЯКИЙ ТИ ПРОСИВ (ЛОГІКА НЕ ЗМІНЕНА)
-        if rsi_v is not None and rsi_v > 72:
+        # === BUY ONLY (2 хв) ===
+
+        if rsi_v is None or adx_v is None:
+            return {"ok": False, "reason": "NO_DATA"}
+
+        # ❌ перекупленість
+        if rsi_v > 70:
+            return {"ok": False, "reason": "RSI_TOO_HIGH"}
+
+        # ❌ флет або перегрів
+        if adx_v < 20 or adx_v > 30:
+            return {"ok": False, "reason": "ADX_NOT_OK"}
+
+        # 🔼 BUY
+        if 55 <= rsi_v <= 70:
             return {
-                "ok": False,
-                "reason": "RSI_OVERBOUGHT",
+                "ok": True,
+                "direction": "BUY",
+                "expiry_sec": 120,
                 "rsi": rsi_v,
                 "adx": adx_v
-            }
+    }
 
-        if adx_v is not None and adx_v > 35:
-            return {
-                "ok": False,
-                "reason": "ADX_OVERHEATED",
-                "rsi": rsi_v,
-                "adx": adx_v
-            }
+return {"ok": False, "reason": "NO_BUY"}
 
-        return {
-            "ok": True,
-            "direction": "BUY",
-            "rsi": rsi_v,
-            "adx": adx_v
-        }
 
 # ---------------- SUBSCRIBERS ----------------
 
