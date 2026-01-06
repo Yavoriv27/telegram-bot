@@ -756,7 +756,6 @@ def build_signal_text(
         + f"\n\n<b>Підтвердження (логіка):</b>\n{used_txt}"
     )
 
-    await update.message.reply_text(msg)
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -777,7 +776,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if last:
         text.append(f"Tick: bid={last['bid']:.5f} ask={last['ask']:.5f}")
     await update.message.reply_text("\n".join(text))
-
+    await update.message.reply_text(msg)
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = ENGINE.compute_signal()
