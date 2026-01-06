@@ -21,6 +21,18 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
+import os, sys, atexit
+
+LOCK_FILE = "/tmp/telegram_bot.lock"
+
+if os.path.exists(LOCK_FILE):
+    print("Bot already running, exit")
+    sys.exit(0)
+
+with open(LOCK_FILE, "w") as f:
+    f.write(str(os.getpid()))
+
+atexit.register(lambda: os.remove(LOCK_FILE) if os.path.exists(LOCK_FILE) else None)
 
 # ========================= INIT =========================
 load_dotenv()
@@ -334,8 +346,15 @@ def main():
     app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("subs", cmd_subs))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("signal", cmd_signal))
+    app.add_handler(CommandHandler("auto_on", cmd_auto_on))
+    app.add_handler(CommandHandler("auto_off", cmd_auto_off))
 
-    app.run_polling()
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
     main()
