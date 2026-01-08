@@ -481,8 +481,6 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = fmt_manual_signal(sig)
     await update.message.reply_text(text, parse_mode="HTML")
 
-    if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
     elif update.effective_chat:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -531,7 +529,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     if not sig.get("ok"):
         return
 
-    msg = fmt_signal(sig)
+    msg = fmt_manual_signal(sig)
     for cid in SUBS.list():
         await context.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
 
@@ -539,6 +537,16 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 # ---------------- MAIN ----------------
 
 def main():
+    import sys
+
+LOCK_FILE = "/tmp/bot.lock"
+
+if os.path.exists(LOCK_FILE):
+    print("Bot already running, exit.")
+    sys.exit(0)
+
+with open(LOCK_FILE, "w") as f:
+    f.write(str(os.getpid()))
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN missing")
@@ -560,6 +568,11 @@ def main():
         interval=ENGINE.auto_every_sec,
         first=10
     )
+    try:
+    app.run_polling(drop_pending_updates=True)
+finally:
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
 
     app.run_polling(drop_pending_updates=True)
 
