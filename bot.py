@@ -408,37 +408,32 @@ SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 
 # ---------------- TELEGRAM TEXT FORMAT ----------------
 
-def fmt_signal(sig: Dict[str, Any]) -> str:
+def fmt_manual_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
-    if sig.get("reason") == "NOT_ENOUGH_DATA":
+    if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
+        arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
         return (
-            "⏳ <b>Немає даних</b>\n"
+            f"{arrow}\n"
+            f"⏱ <b>Експірація:</b> 2 хв\n"
             f"🕒 <b>Kyiv:</b> {t}\n"
-            "Потрібно ~30 закритих свічок на 1m і 5m "
-            "(приблизно 10–60 хв після старту)."
+            f"<b>RSI(14):</b> {sig['rsi']}\n"
+            f"<b>ADX(14):</b> {sig['adx']}"
         )
 
-    if sig.get("reason") == "RSI_OVERBOUGHT":
-        return (
-            "❌ <b>ПРОПУСТИТИ УГОДУ</b>\n"
-            f"🕒 <b>Kyiv:</b> {t}\n"
-            f"<b>RSI(14):</b> {sig.get('rsi'):.1f} — перекупленість"
-        )
-
-    if sig.get("reason") == "ADX_OVERHEATED":
-        return (
-            "⚠️ <b>ПРОПУСТИТИ УГОДУ</b>\n"
-            f"🕒 <b>Kyiv:</b> {t}\n"
-            f"<b>ADX(14):</b> {sig.get('adx'):.1f} — тренд перегрітий"
-        )
+    reasons = {
+        "NOT_ENOUGH_DATA": "⏳ Недостатньо свічок (бот тільки запустився)",
+        "ADX_FILTER": "⚠️ Немає нормального тренду (ADX)",
+        "NO_SIGNAL": "😐 RSI у середині — немає переваги",
+        "NO_DATA": "❌ Індикатори не порахувались"
+    }
 
     return (
-        "✅ <b>МОЖНА ВХОДИТИ</b>\n"
+        "❌ <b>Сигналу немає</b>\n"
         f"🕒 <b>Kyiv:</b> {t}\n"
-        f"<b>RSI(14):</b> {sig.get('rsi'):.1f}\n"
-        f"<b>ADX(14):</b> {sig.get('adx'):.1f}"
+        f"{reasons.get(sig.get('reason'), sig.get('reason'))}"
     )
+
 
 
 # ---------------- COMMANDS ----------------
@@ -483,7 +478,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = ENGINE.compute_signal()
-    text = fmt_signal(sig)
+    text = fmt_manual_signal(sig)
+    await update.message.reply_text(text, parse_mode="HTML")
 
     if update.message:
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
