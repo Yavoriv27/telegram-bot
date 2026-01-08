@@ -243,7 +243,7 @@ class SignalEngine:
 
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
-        self.min_conf = int(os.getenv("MIN_CONF", "88"))
+        self.min_conf = int(os.getenv("MIN_CONF", "83"))
 
         self.tf1 = 60
         self.tf5 = 300
@@ -471,7 +471,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = ENGINE.compute_signal()
-    await update.message.reply_text(fmt_signal(sig), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        fmt_signal(sig),
+        parse_mode=ParseMode.HTML
+    )
 
 
 async def cmd_auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
