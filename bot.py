@@ -539,7 +539,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 # ---------------- MAIN ----------------
 
 def main():
-    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN missing")
 
@@ -554,12 +554,16 @@ def main():
     app.add_handler(CommandHandler("auto_off", cmd_auto_off))
     app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
-    app.add_handler(CommandHandler("subs", cmd_subs))
 
-    app.job_queue.run_repeating(auto_job, interval=ENGINE.auto_every_sec, first=10)
+    app.job_queue.run_repeating(
+        auto_job,
+        interval=ENGINE.auto_every_sec,
+        first=10
+    )
 
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     main()
+
