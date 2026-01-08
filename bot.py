@@ -477,15 +477,17 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     fast = snap["fast"]
     slow = snap["slow"]
-    last = snap["last"]
 
-   msg = (
-    f"Стан: OK\n"
-    f"Kyiv: {t}\n"
-    f"Авто: {'ON' if ENGINE.auto_enabled else 'OFF'} "
-    f"(кожні {ENGINE.auto_every_sec}s)\n"
-    f"Свічки: fast={len(fast)}  slow={len(slow)}"
-)
+    msg = (
+        "📊 <b>СТАТУС БОТА</b>\n"
+        f"🕒 <b>Kyiv:</b> {t}\n"
+        f"⚙️ <b>Авто:</b> {'ON' if ENGINE.auto_enabled else 'OFF'}\n"
+        f"⏱ <b>Інтервал:</b> {ENGINE.auto_every_sec} сек\n"
+        f"🧱 <b>Свічки:</b> fast={len(fast)} | slow={len(slow)}"
+    )
+
+    await update.message.reply_text(msg, parse_mode="HTML")
+
 
     if last:
         msg += f"\nTick: bid={last['bid']:.5f} ask={last['ask']:.5f}"
