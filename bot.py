@@ -245,7 +245,7 @@ class SignalEngine:
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
         self.min_conf = int(os.getenv("MIN_CONF", "83"))
 
-        self.tf1 = 60
+        self.tf1 = 30
         self.tf5 = 300
 
         self._q = queue.Queue(maxsize=20000)
@@ -404,7 +404,7 @@ def fmt_signal(sig: Dict[str, Any]) -> str:
         return (
             "⏳ <b>Немає даних</b>\n"
             f"🕒 <b>Kyiv:</b> {t}\n"
-            "Потрібно ~60 закритих свічок на 1m і 5m "
+            "Потрібно ~30 закритих свічок на 1m і 5m "
             "(приблизно 10–60 хв після старту)."
         )
 
