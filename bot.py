@@ -475,18 +475,17 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     snap = ENGINE.snapshot()
     t = fmt_kyiv(now_utc())
 
-    h1 = snap["h1"]
-    h5 = snap["h5"]
+    fast = snap["fast"]
+    slow = snap["slow"]
     last = snap["last"]
 
-    msg = (
-        f"Стан: OK\n"
-        f"Kyiv: {t}\n"
-        f"Авто: {'ON' if ENGINE.auto_enabled else 'OFF'} "
-        f"(кожні {ENGINE.auto_every_sec}s)\n"
-        f"MIN_CONF: {ENGINE.min_conf}%\n"
-        f"Свічки: 1m={len(h1)}  5m={len(h5)}"
-    )
+   msg = (
+    f"Стан: OK\n"
+    f"Kyiv: {t}\n"
+    f"Авто: {'ON' if ENGINE.auto_enabled else 'OFF'} "
+    f"(кожні {ENGINE.auto_every_sec}s)\n"
+    f"Свічки: fast={len(fast)}  slow={len(slow)}"
+)
 
     if last:
         msg += f"\nTick: bid={last['bid']:.5f} ask={last['ask']:.5f}"
