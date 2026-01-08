@@ -245,8 +245,8 @@ class SignalEngine:
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
         self.min_conf = int(os.getenv("MIN_CONF", "83"))
 
-        self.tf1 = 30
-        self.tf5 = 300
+        self.tf1 = 30      # 30 секунд
+        self.tf5 = 300     # 5 хвилин
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
@@ -263,6 +263,7 @@ class SignalEngine:
         self.last_tick = None
         self._stream = None
 
+    # ---------- STREAM ----------
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
         account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
@@ -306,6 +307,7 @@ class SignalEngine:
                     self._last_closed_5m_ts = c5.start_ts
                     self.hist_5m.append(c5)
 
+    # ---------- SNAPSHOT (ТІЛЬКИ ДАНІ) ----------
     def snapshot(self):
         with self._lock:
             return {
@@ -314,20 +316,36 @@ class SignalEngine:
                 "h5": self.hist_5m.items(),
             }
 
-        # === BUY / SELL (2 хв) ===
+    # ---------- SIGNAL LOGIC ----------
+    def compute_signal(self) -> Dict[str, Any]:
+        snap = self.snapshot()
+        last = snap["last"]
+        h1 = snap["h1"]
+        h5 = snap["h5"]
+
+        # ❗ даних ще мало
+        if not last or len(h1) < 30 or len(h5) < 30:
+            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+
+        closes_5m = [c.close for c in h5]
+        highs_5m = [c.high for c in h5]
+        lows_5m = [c.low for c in h5]
+
+        rsi_v = rsi(closes_5m, 14)
+        adx_v = adx(highs_5m, lows_5m, closes_5m, 14)
 
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
 
-        # ❌ перегрітий ринок
+        # ❌ тренд слабкий або перегрітий
         if adx_v < 20 or adx_v > 30:
-            return {"ok": False, "reason": "ADX_NOT_OK"}
+            return {"ok": False, "reason": "ADX_NOT_OK", "rsi": rsi_v, "adx": adx_v}
 
         # ❌ перекупленість / перепроданість
         if rsi_v > 70 or rsi_v < 30:
-            return {"ok": False, "reason": "RSI_EXTREME"}
+            return {"ok": False, "reason": "RSI_EXTREME", "rsi": rsi_v, "adx": adx_v}
 
-        # 🔼 BUY
+        # 🔼 BUY (2 хв)
         if 55 <= rsi_v <= 70:
             return {
                 "ok": True,
@@ -337,7 +355,7 @@ class SignalEngine:
                 "adx": adx_v
             }
 
-        # 🔻 SELL
+        # 🔻 SELL (2 хв)
         if 30 <= rsi_v <= 45:
             return {
                 "ok": True,
@@ -348,6 +366,7 @@ class SignalEngine:
             }
 
         return {"ok": False, "reason": "NO_SIGNAL"}
+
 
 
 
