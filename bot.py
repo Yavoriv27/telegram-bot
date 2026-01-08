@@ -243,22 +243,22 @@ class SignalEngine:
 
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
-        self.min_conf = int(os.getenv("MIN_CONF", "83"))
 
-        self.tf1 = 30      # 30 секунд
-        self.tf5 = 300     # 5 хвилин
+        # таймфрейми
+        self.tf_fast = 30      # 30 секунд (для швидкого руху)
+        self.tf_slow = 300     # 5 хвилин (контекст)
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
 
-        self.builder_1m = InternalCandleBuilder(self.tf1)
-        self.builder_5m = InternalCandleBuilder(self.tf5)
+        self.builder_fast = InternalCandleBuilder(self.tf_fast)
+        self.builder_slow = InternalCandleBuilder(self.tf_slow)
 
-        self.hist_1m = CandleHistory(maxlen=400)
-        self.hist_5m = CandleHistory(maxlen=400)
+        self.hist_fast = CandleHistory(maxlen=400)
+        self.hist_slow = CandleHistory(maxlen=400)
 
-        self._last_closed_1m_ts = None
-        self._last_closed_5m_ts = None
+        self._last_fast_ts = None
+        self._last_slow_ts = None
 
         self.last_tick = None
         self._stream = None
@@ -294,59 +294,69 @@ class SignalEngine:
             with self._lock:
                 self.last_tick = item
 
-                self.builder_1m.on_tick(ts, mid)
-                self.builder_5m.on_tick(ts, mid)
+                self.builder_fast.on_tick(ts, mid)
+                self.builder_slow.on_tick(ts, mid)
 
-                c1 = self.builder_1m.last_closed
-                if c1 and (self._last_closed_1m_ts is None or c1.start_ts != self._last_closed_1m_ts):
-                    self._last_closed_1m_ts = c1.start_ts
-                    self.hist_1m.append(c1)
+                c_fast = self.builder_fast.last_closed
+                if c_fast and c_fast.start_ts != self._last_fast_ts:
+                    self._last_fast_ts = c_fast.start_ts
+                    self.hist_fast.append(c_fast)
 
-                c5 = self.builder_5m.last_closed
-                if c5 and (self._last_closed_5m_ts is None or c5.start_ts != self._last_closed_5m_ts):
-                    self._last_closed_5m_ts = c5.start_ts
-                    self.hist_5m.append(c5)
+                c_slow = self.builder_slow.last_closed
+                if c_slow and c_slow.start_ts != self._last_slow_ts:
+                    self._last_slow_ts = c_slow.start_ts
+                    self.hist_slow.append(c_slow)
 
-    # ---------- SNAPSHOT (ТІЛЬКИ ДАНІ) ----------
+    # ---------- SNAPSHOT ----------
     def snapshot(self):
         with self._lock:
             return {
                 "last": self.last_tick,
-                "h1": self.hist_1m.items(),
-                "h5": self.hist_5m.items(),
+                "fast": self.hist_fast.items(),
+                "slow": self.hist_slow.items(),
             }
 
     # ---------- SIGNAL LOGIC ----------
     def compute_signal(self) -> Dict[str, Any]:
         snap = self.snapshot()
         last = snap["last"]
-        h1 = snap["h1"]
-        h5 = snap["h5"]
+        fast = snap["fast"]
+        slow = snap["slow"]
 
-        # ❗ даних ще мало
-        if not last or len(h1) < 30 or len(h5) < 30:
+        # недостатньо даних
+        if not last or len(fast) < 30 or len(slow) < 30:
             return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-        closes_5m = [c.close for c in h5]
-        highs_5m = [c.high for c in h5]
-        lows_5m = [c.low for c in h5]
+        closes = [c.close for c in slow]
+        highs = [c.high for c in slow]
+        lows = [c.low for c in slow]
 
-        rsi_v = rsi(closes_5m, 14)
-        adx_v = adx(highs_5m, lows_5m, closes_5m, 14)
+        rsi_v = rsi(closes, 14)
+        adx_v = adx(highs, lows, closes, 14)
 
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
 
-        # ❌ тренд слабкий або перегрітий
+        # ❌ слабкий або перегрітий тренд
         if adx_v < 20 or adx_v > 30:
-            return {"ok": False, "reason": "ADX_NOT_OK", "rsi": rsi_v, "adx": adx_v}
+            return {
+                "ok": False,
+                "reason": "ADX_NOT_OK",
+                "rsi": rsi_v,
+                "adx": adx_v
+            }
 
-        # ❌ перекупленість / перепроданість
-        if rsi_v > 70 or rsi_v < 30:
-            return {"ok": False, "reason": "RSI_EXTREME", "rsi": rsi_v, "adx": adx_v}
+        # ❌ екстремуми RSI
+        if rsi_v >= 70 or rsi_v <= 30:
+            return {
+                "ok": False,
+                "reason": "RSI_EXTREME",
+                "rsi": rsi_v,
+                "adx": adx_v
+            }
 
         # 🔼 BUY (2 хв)
-        if 55 <= rsi_v <= 70:
+        if 55 <= rsi_v < 70:
             return {
                 "ok": True,
                 "direction": "BUY",
@@ -356,7 +366,7 @@ class SignalEngine:
             }
 
         # 🔻 SELL (2 хв)
-        if 30 <= rsi_v <= 45:
+        if 30 < rsi_v <= 45:
             return {
                 "ok": True,
                 "direction": "SELL",
@@ -366,10 +376,6 @@ class SignalEngine:
             }
 
         return {"ok": False, "reason": "NO_SIGNAL"}
-
-
-
-
 # ---------------- SUBSCRIBERS ----------------
 
 class Subscribers:
