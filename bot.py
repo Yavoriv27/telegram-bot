@@ -471,10 +471,16 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = ENGINE.compute_signal()
-    await update.message.reply_text(
-        fmt_signal(sig),
-        parse_mode=ParseMode.HTML
-    )
+    text = fmt_signal(sig)
+
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    elif update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            parse_mode=ParseMode.HTML
+        )
 
 
 async def cmd_auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
