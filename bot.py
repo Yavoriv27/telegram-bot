@@ -338,15 +338,15 @@ class SignalEngine:
             return {"ok": False, "reason": "NO_DATA"}
 
         # мертвий ринок
-        if adx_v < 18:
+        if adx_v < 17:
             return {"ok": False, "reason": "MARKET_FLAT"}
 
         # перегрітий тренд
-        if adx_v > 35:
+        if adx_v > 36:
             return {"ok": False, "reason": "OVERHEATED"}
 
         # BUY
-        if 56 <= rsi_v <= 66:
+        if 55 <= rsi_v <= 66:
             return {
                 "ok": True,
                 "direction": "BUY",
@@ -356,7 +356,7 @@ class SignalEngine:
             }
 
         # SELL
-        if 34 <= rsi_v <= 44:
+        if 34 <= rsi_v <= 45:
             return {
                 "ok": True,
                 "direction": "SELL",
