@@ -318,34 +318,34 @@ class SignalEngine:
 
     # ---------- SIGNAL LOGIC ----------
     def compute_signal(self):
-    snap = self.snapshot()
-    last = snap["last"]
-    fast = snap["fast"]
-    slow = snap["slow"]
+        snap = self.snapshot()
+        last = snap["last"]
+        fast = snap["fast"]
+        slow = snap["slow"]
 
-    if not last or len(fast) < 30 or len(slow) < 30:
-        return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+        if not last or len(fast) < 30 or len(slow) < 30:
+            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-    closes = [c.close for c in slow]
-    highs = [c.high for c in slow]
-    lows = [c.low for c in slow]
+        closes = [c.close for c in slow]
+        highs = [c.high for c in slow]
+        lows = [c.low for c in slow]
 
-    rsi_v = rsi(closes, 14)
-    adx_v = adx(highs, lows, closes, 14)
+        rsi_v = rsi(closes, 14)
+        adx_v = adx(highs, lows, closes, 14)
 
-    if rsi_v is None or adx_v is None:
+        if rsi_v is None or adx_v is None:
         return {"ok": False, "reason": "NO_DATA"}
 
     # мертвий ринок
-    if adx_v < 18:
-        return {"ok": False, "reason": "MARKET_FLAT"}
+        if adx_v < 18:
+            return {"ok": False, "reason": "MARKET_FLAT"}
 
     # перегрітий тренд
-    if adx_v > 35:
+        if adx_v > 35:
         return {"ok": False, "reason": "OVERHEATED"}
 
     # BUY
-    if 56 <= rsi_v <= 66:
+        if 56 <= rsi_v <= 66:
         return {
             "ok": True,
             "direction": "BUY",
@@ -355,7 +355,7 @@ class SignalEngine:
         }
 
     # SELL
-    if 34 <= rsi_v <= 44:
+        if 34 <= rsi_v <= 44:
         return {
             "ok": True,
             "direction": "SELL",
@@ -364,7 +364,7 @@ class SignalEngine:
             "adx": round(adx_v, 1)
         }
 
-    return {"ok": False, "reason": "NO_SIGNAL"}
+        return {"ok": False, "reason": "NO_SIGNAL"}
 
 
 
