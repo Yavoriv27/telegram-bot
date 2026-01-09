@@ -317,6 +317,7 @@ class SignalEngine:
             }
 
     # ---------- SIGNAL LOGIC ----------
+    # ---------- SIGNAL LOGIC ----------
     def compute_signal(self):
         snap = self.snapshot()
         last = snap["last"]
@@ -336,35 +337,36 @@ class SignalEngine:
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
 
-    # мертвий ринок
+        # мертвий ринок
         if adx_v < 18:
             return {"ok": False, "reason": "MARKET_FLAT"}
 
-    # перегрітий тренд
+        # перегрітий тренд
         if adx_v > 35:
-        return {"ok": False, "reason": "OVERHEATED"}
+            return {"ok": False, "reason": "OVERHEATED"}
 
-    # BUY
+        # BUY
         if 56 <= rsi_v <= 66:
-        return {
-            "ok": True,
-            "direction": "BUY",
-            "expiry_sec": 600,
-            "rsi": round(rsi_v, 1),
-            "adx": round(adx_v, 1)
-        }
+            return {
+                "ok": True,
+                "direction": "BUY",
+                "expiry_sec": 600,   # 10 хвилин
+                "rsi": round(rsi_v, 1),
+                "adx": round(adx_v, 1)
+            }
 
-    # SELL
+        # SELL
         if 34 <= rsi_v <= 44:
-        return {
-            "ok": True,
-            "direction": "SELL",
-            "expiry_sec": 600,
-            "rsi": round(rsi_v, 1),
-            "adx": round(adx_v, 1)
-        }
+            return {
+                "ok": True,
+                "direction": "SELL",
+                "expiry_sec": 600,   # 10 хвилин
+                "rsi": round(rsi_v, 1),
+                "adx": round(adx_v, 1)
+            }
 
         return {"ok": False, "reason": "NO_SIGNAL"}
+
 
 
 
