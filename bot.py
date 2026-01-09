@@ -330,11 +330,16 @@ class SignalEngine:
         highs = [c.high for c in slow]
         lows = [c.low for c in slow]
 
-        rsi_v = rsi(closes, 14)
+      rsi_v = rsi(closes, 14)
         adx_v = adx(highs, lows, closes, 14)
 
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
+
+    # ⛔ захист: якщо ринок мертвий (флет)
+        if adx_v < 18:
+            return {"ok": False, "reason": "MARKET_FLAT"}
+
 
         # тренд повинен бути ЖИВИЙ, але не перегрітий
         if adx_v < 21 or adx_v > 29:
