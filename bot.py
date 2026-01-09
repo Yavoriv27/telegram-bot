@@ -481,11 +481,6 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = fmt_manual_signal(sig)
     await update.message.reply_text(text, parse_mode="HTML")
 
-    elif update.effective_chat:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=text,
-            parse_mode=ParseMode.HTML
         )
 
 
