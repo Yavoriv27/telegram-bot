@@ -245,8 +245,8 @@ class SignalEngine:
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
 
         # таймфрейми
-        self.tf_fast = 30     # 30 секунд
-        self.tf_slow = 300    # 5 хвилин
+        self.tf_fast = 60     # 30 секунд
+        self.tf_slow = 600    # 5 хвилин
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
@@ -337,21 +337,21 @@ class SignalEngine:
             return {"ok": False, "reason": "NO_DATA"}
 
         # тренд повинен бути ЖИВИЙ, але не перегрітий
-        if adx_v < 22 or adx_v > 30:
+        if adx_v < 21 or adx_v > 29:
             return {"ok": False, "reason": "ADX_FILTER"}
 
         # ---- BUY ----
-        if 58 <= rsi_v <= 66:
+        if 58 <= rsi_v <= 65:
             return {
                 "ok": True,
                 "direction": "BUY",
-                "expiry_sec": 120,
+                "expiry_sec": 600,
                 "rsi": round(rsi_v, 1),
                 "adx": round(adx_v, 1)
             }
 
         # ---- SELL ----
-        if 34 <= rsi_v <= 42:
+        if 34 <= rsi_v <= 45:
             return {
                 "ok": True,
                 "direction": "SELL",
@@ -415,7 +415,7 @@ def fmt_manual_signal(sig: dict) -> str:
         arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
         return (
             f"{arrow}\n"
-            f"⏱ <b>Експірація:</b> 2 хв\n"
+            f"⏱ <b>Експірація:</b> 10 хв\n"
             f"🕒 <b>Kyiv:</b> {t}\n"
             f"<b>RSI(14):</b> {sig['rsi']}\n"
             f"<b>ADX(14):</b> {sig['adx']}"
