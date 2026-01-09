@@ -318,54 +318,54 @@ class SignalEngine:
 
     # ---------- SIGNAL LOGIC ----------
     def compute_signal(self):
-        snap = self.snapshot()
-        last = snap["last"]
-        fast = snap["fast"]
-        slow = snap["slow"]
+    snap = self.snapshot()
+    last = snap["last"]
+    fast = snap["fast"]
+    slow = snap["slow"]
 
-        if not last or len(fast) < 30 or len(slow) < 30:
-            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+    if not last or len(fast) < 30 or len(slow) < 30:
+        return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-        closes = [c.close for c in slow]
-        highs = [c.high for c in slow]
-        lows = [c.low for c in slow]
+    closes = [c.close for c in slow]
+    highs = [c.high for c in slow]
+    lows = [c.low for c in slow]
 
-      rsi_v = rsi(closes, 14)
-        adx_v = adx(highs, lows, closes, 14)
+    rsi_v = rsi(closes, 14)
+    adx_v = adx(highs, lows, closes, 14)
 
-        if rsi_v is None or adx_v is None:
-            return {"ok": False, "reason": "NO_DATA"}
+    if rsi_v is None or adx_v is None:
+        return {"ok": False, "reason": "NO_DATA"}
 
-    # ⛔ захист: якщо ринок мертвий (флет)
-        if adx_v < 18:
-            return {"ok": False, "reason": "MARKET_FLAT"}
+    # захист: мертвий ринок
+    if adx_v < 18:
+        return {"ok": False, "reason": "MARKET_FLAT"}
 
+    # тренд є, але не перегрітий
+    if adx_v > 35:
+        return {"ok": False, "reason": "OVERHEATED"}
 
-        # тренд повинен бути ЖИВИЙ, але не перегрітий
-        if adx_v < 21 or adx_v > 29:
-            return {"ok": False, "reason": "ADX_FILTER"}
+    # ---- BUY ----
+    if 56 <= rsi_v <= 66:
+        return {
+            "ok": True,
+            "direction": "BUY",
+            "expiry_sec": 600,
+            "rsi": round(rsi_v, 1),
+            "adx": round(adx_v, 1)
+        }
 
-        # ---- BUY ----
-        if 58 <= rsi_v <= 65:
-            return {
-                "ok": True,
-                "direction": "BUY",
-                "expiry_sec": 600,
-                "rsi": round(rsi_v, 1),
-                "adx": round(adx_v, 1)
-            }
+    # ---- SELL ----
+    if 34 <= rsi_v <= 44:
+        return {
+            "ok": True,
+            "direction": "SELL",
+            "expiry_sec": 600,
+            "rsi": round(rsi_v, 1),
+            "adx": round(adx_v, 1)
+        }
 
-        # ---- SELL ----
-        if 34 <= rsi_v <= 45:
-            return {
-                "ok": True,
-                "direction": "SELL",
-                "expiry_sec": 120,
-                "rsi": round(rsi_v, 1),
-                "adx": round(adx_v, 1)
-            }
+    return {"ok": False, "reason": "NO_SIGNAL"}
 
-        return {"ok": False, "reason": "NO_SIGNAL"}
 
 # ---------------- SUBSCRIBERS ----------------
 
