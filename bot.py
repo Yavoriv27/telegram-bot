@@ -334,7 +334,7 @@ class SignalEngine:
         adx_v = adx(highs, lows, closes, 14)
 
         if rsi_v is None or adx_v is None:
-        return {"ok": False, "reason": "NO_DATA"}
+            return {"ok": False, "reason": "NO_DATA"}
 
     # мертвий ринок
         if adx_v < 18:
