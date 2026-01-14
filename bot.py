@@ -346,11 +346,10 @@ class SignalEngine:
                 "fast": self.hist_fast.items(),
                 "slow": self.hist_slow.items(),
             }
-
-    # ---------- SIGNAL LOGIC ----------
+            
     # ---------- SIGNAL LOGIC ----------
     def compute_signal(self):
-        snap = self.snapshot()
+    snap = self.snapshot()
     last = snap["last"]
     fast = snap["fast"]
     slow = snap["slow"]
