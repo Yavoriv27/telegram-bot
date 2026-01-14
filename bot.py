@@ -262,6 +262,10 @@ class SignalEngine:
 
         self.last_tick = None
         self._stream = None
+        self._last_sent_ts = 0.0
+self.cooldown_sec = int(os.getenv("COOLDOWN_SEC", "600"))  # 10 хв анти-спам
+self._last_dir = None
+self._last_slow_signal_candle = None
 
     # ---------- STREAM ----------
     def start_stream(self):
@@ -318,56 +322,71 @@ class SignalEngine:
 
     # ---------- SIGNAL LOGIC ----------
     # ---------- SIGNAL LOGIC ----------
-    def compute_signal(self):
-        snap = self.snapshot()
-        last = snap["last"]
-        fast = snap["fast"]
-        slow = snap["slow"]
+def compute_signal(self):
+    snap = self.snapshot()
+    last = snap["last"]
+    fast = snap["fast"]
+    slow = snap["slow"]
 
-        if not last or len(fast) < 30 or len(slow) < 30:
-            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+    if not last or len(fast) < 30 or len(slow) < 30:
+        return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-        closes = [c.close for c in slow]
-        highs = [c.high for c in slow]
-        lows = [c.low for c in slow]
+    # ✅ СИГНАЛ ТІЛЬКИ НА НОВІЙ ЗАКРИТІЙ 10-хв СВІЧЦІ
+    last_closed_slow = slow[-1]
+    if self._last_slow_signal_candle == last_closed_slow.start_ts:
+        return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
+    self._last_slow_signal_candle = last_closed_slow.start_ts
 
-        rsi_v = rsi(closes, 14)
-        adx_v = adx(highs, lows, closes, 14)
+    closes = [c.close for c in slow]
+    highs = [c.high for c in slow]
+    lows = [c.low for c in slow]
 
-        if rsi_v is None or adx_v is None:
-            return {"ok": False, "reason": "NO_DATA"}
+    rsi_v = rsi(closes, 14)
+    adx_v = adx(highs, lows, closes, 14)
 
-        # мертвий ринок
-        if adx_v < 17:
-            return {"ok": False, "reason": "MARKET_FLAT"}
+    if rsi_v is None or adx_v is None:
+        return {"ok": False, "reason": "NO_DATA"}
 
-        # перегрітий тренд
-        if adx_v > 36:
-            return {"ok": False, "reason": "OVERHEATED"}
+    # 1) Ринок мертвий
+    if adx_v < 18:
+        return {"ok": False, "reason": "MARKET_FLAT"}
 
-        # BUY
-        if 55 <= rsi_v <= 66:
-            return {
-                "ok": True,
-                "direction": "BUY",
-                "expiry_sec": 600,   # 10 хвилин
-                "rsi": round(rsi_v, 1),
-                "adx": round(adx_v, 1)
-            }
+    # 2) Тренд нормальний
+    if adx_v < 22 or adx_v > 35:
+        return {"ok": False, "reason": "ADX_FILTER"}
 
-        # SELL
-        if 34 <= rsi_v <= 45:
-            return {
-                "ok": True,
-                "direction": "SELL",
-                "expiry_sec": 600,   # 10 хвилин
-                "rsi": round(rsi_v, 1),
-                "adx": round(adx_v, 1)
-            }
+    # 3) Анти-спам (навіть якщо перезапуск бота)
+    now_ts = time.time()
+    if now_ts - self._last_sent_ts < self.cooldown_sec:
+        return {"ok": False, "reason": "COOLDOWN"}
 
+    direction = None
+
+    # ✅ BUY тільки сильний імпульс
+    if 60 <= rsi_v <= 63:
+        direction = "BUY"
+
+    # ✅ SELL тільки сильний імпульс
+    elif 37 <= rsi_v <= 40:
+        direction = "SELL"
+
+    if not direction:
         return {"ok": False, "reason": "NO_SIGNAL"}
 
+    # 4) Не повторювати однаковий напрям підряд
+    if self._last_dir == direction:
+        return {"ok": False, "reason": "SAME_DIRECTION"}
 
+    self._last_dir = direction
+    self._last_sent_ts = now_ts
+
+    return {
+        "ok": True,
+        "direction": direction,
+        "expiry_sec": 600,  # 10 хв
+        "rsi": round(rsi_v, 1),
+        "adx": round(adx_v, 1)
+    }
 
 
 # ---------------- SUBSCRIBERS ----------------
@@ -434,6 +453,10 @@ def fmt_manual_signal(sig: dict) -> str:
         "ADX_FILTER": "⚠️ Немає нормального тренду (ADX)",
         "NO_SIGNAL": "😐 RSI у середині — немає переваги",
         "NO_DATA": "❌ Індикатори не порахувались"
+        "MARKET_FLAT": "🟡 Ринок мертвий (ADX < 18)",
+"COOLDOWN": "⏳ Анти-спам: чекаємо 10 хв",
+"SAME_DIRECTION": "ℹ️ Напрям не змінився (фільтр шуму)",
+"WAIT_NEXT_CANDLE": "⏳ Чекаю закриття нової 10-хв свічки",
     }
 
     return (
