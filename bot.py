@@ -414,7 +414,7 @@ class SignalEngine:
         "adx": round(adx_v, 1)
     }
 
-
+return {"ok": False, "reason": "NO_SIGNAL"}
 # ---------------- SUBSCRIBERS ----------------
 
 class Subscribers:
