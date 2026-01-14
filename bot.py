@@ -349,10 +349,10 @@ class SignalEngine:
             
     # ---------- SIGNAL LOGIC ----------
     def compute_signal(self):
-    snap = self.snapshot()
-    last = snap["last"]
-    fast = snap["fast"]
-    slow = snap["slow"]
+        snap = self.snapshot()
+        last = snap["last"]
+        fast = snap["fast"]
+        slow = snap["slow"]
 
     if not last or len(fast) < 30 or len(slow) < 30:
         return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
