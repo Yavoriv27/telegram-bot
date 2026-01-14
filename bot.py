@@ -322,7 +322,7 @@ self._last_slow_signal_candle = None
 
     # ---------- SIGNAL LOGIC ----------
     # ---------- SIGNAL LOGIC ----------
-def compute_signal(self):
+    def compute_signal(self):
     snap = self.snapshot()
     last = snap["last"]
     fast = snap["fast"]
@@ -434,8 +434,7 @@ ENGINE = SignalEngine()
 SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 
 # ---------------- TELEGRAM TEXT FORMAT ----------------
-
-def fmt_manual_signal(sig: dict) -> str:
+    def fmt_manual_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
     if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
@@ -559,7 +558,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- MAIN ----------------
 
-def main():
+   def main():
     import sys
 
     LOCK_FILE = "/tmp/bot.lock"
