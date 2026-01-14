@@ -354,8 +354,8 @@ class SignalEngine:
         fast = snap["fast"]
         slow = snap["slow"]
 
-    if not last or len(fast) < 30 or len(slow) < 30:
-        return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+        if not last or len(fast) < 30 or len(slow) < 30:
+            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
     # ✅ СИГНАЛ ТІЛЬКИ НА НОВІЙ ЗАКРИТІЙ 10-хв СВІЧЦІ
     last_closed_slow = slow[-1]
