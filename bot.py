@@ -275,6 +275,7 @@ class SignalEngine:
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
 
+        # 10 хв свічки
         self.tf_fast = 60
         self.tf_slow = 600
 
@@ -293,7 +294,11 @@ class SignalEngine:
         self.last_tick = None
         self._stream = None
 
-        self._last_sent_ts = 0.0  # антиспам (якщо треба)
+        # анти-спам / фільтри шуму
+        self.cooldown_sec = int(os.getenv("COOLDOWN_SEC", "600"))  # 10 хв
+        self._last_sent_ts = 0.0
+        self._last_dir = None
+        self._last_slow_signal_candle = None
 
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
@@ -338,7 +343,6 @@ class SignalEngine:
                     self._last_slow_ts = c_slow.start_ts
                     self.hist_slow.append(c_slow)
 
-    # ---------- SNAPSHOT ----------
     def snapshot(self):
         with self._lock:
             return {
@@ -346,8 +350,7 @@ class SignalEngine:
                 "fast": self.hist_fast.items(),
                 "slow": self.hist_slow.items(),
             }
-            
-    # ---------- SIGNAL LOGIC ----------
+
     def compute_signal(self):
         snap = self.snapshot()
         last = snap["last"]
@@ -357,64 +360,56 @@ class SignalEngine:
         if not last or len(fast) < 30 or len(slow) < 30:
             return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-    # ✅ СИГНАЛ ТІЛЬКИ НА НОВІЙ ЗАКРИТІЙ 10-хв СВІЧЦІ
-    last_closed_slow = slow[-1]
-    if self._last_slow_signal_candle == last_closed_slow.start_ts:
-        return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
-    self._last_slow_signal_candle = last_closed_slow.start_ts
+        # ✅ сигнал тільки на новій закритій 10-хв свічці
+        last_closed_slow = slow[-1]
+        if self._last_slow_signal_candle == last_closed_slow.start_ts:
+            return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
+        self._last_slow_signal_candle = last_closed_slow.start_ts
 
-    closes = [c.close for c in slow]
-    highs = [c.high for c in slow]
-    lows = [c.low for c in slow]
+        closes = [c.close for c in slow]
+        highs = [c.high for c in slow]
+        lows = [c.low for c in slow]
 
-    rsi_v = rsi(closes, 14)
-    adx_v = adx(highs, lows, closes, 14)
+        rsi_v = rsi(closes, 14)
+        adx_v = adx(highs, lows, closes, 14)
 
-    if rsi_v is None or adx_v is None:
-        return {"ok": False, "reason": "NO_DATA"}
+        if rsi_v is None or adx_v is None:
+            return {"ok": False, "reason": "NO_DATA"}
 
-    # 1) Ринок мертвий
-    if adx_v < 18:
-        return {"ok": False, "reason": "MARKET_FLAT"}
+        if adx_v < 18:
+            return {"ok": False, "reason": "MARKET_FLAT"}
 
-    # 2) Тренд нормальний
-    if adx_v < 22 or adx_v > 35:
-        return {"ok": False, "reason": "ADX_FILTER"}
+        if adx_v < 22 or adx_v > 35:
+            return {"ok": False, "reason": "ADX_FILTER"}
 
-    # 3) Анти-спам (навіть якщо перезапуск бота)
-    now_ts = time.time()
-    if now_ts - self._last_sent_ts < self.cooldown_sec:
-        return {"ok": False, "reason": "COOLDOWN"}
+        now_ts = time.time()
+        if now_ts - self._last_sent_ts < self.cooldown_sec:
+            return {"ok": False, "reason": "COOLDOWN"}
 
-    direction = None
+        direction = None
 
-    # ✅ BUY тільки сильний імпульс
-    if 60 <= rsi_v <= 63:
-        direction = "BUY"
+        if 60 <= rsi_v <= 63:
+            direction = "BUY"
+        elif 37 <= rsi_v <= 40:
+            direction = "SELL"
 
-    # ✅ SELL тільки сильний імпульс
-    elif 37 <= rsi_v <= 40:
-        direction = "SELL"
+        if not direction:
+            return {"ok": False, "reason": "NO_SIGNAL"}
 
-    if not direction:
-        return {"ok": False, "reason": "NO_SIGNAL"}
+        if self._last_dir == direction:
+            return {"ok": False, "reason": "SAME_DIRECTION"}
 
-    # 4) Не повторювати однаковий напрям підряд
-    if self._last_dir == direction:
-        return {"ok": False, "reason": "SAME_DIRECTION"}
+        self._last_dir = direction
+        self._last_sent_ts = now_ts
 
-    self._last_dir = direction
-    self._last_sent_ts = now_ts
+        return {
+            "ok": True,
+            "direction": direction,
+            "expiry_sec": 600,  # 10 хв
+            "rsi": round(rsi_v, 1),
+            "adx": round(adx_v, 1)
+        }
 
-    return {
-        "ok": True,
-        "direction": direction,
-        "expiry_sec": 600,  # 10 хв
-        "rsi": round(rsi_v, 1),
-        "adx": round(adx_v, 1)
-    }
-
-return {"ok": False, "reason": "NO_SIGNAL"}
 # ---------------- SUBSCRIBERS ----------------
 
 class Subscribers:
