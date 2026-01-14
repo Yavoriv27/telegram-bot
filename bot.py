@@ -268,6 +268,33 @@ self._last_dir = None
 self._last_slow_signal_candle = None
 
     # ---------- STREAM ----------
+class SignalEngine:
+    def __init__(self):
+        self.symbol = os.getenv("SYMBOL", "EUR_USD")
+
+        self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
+        self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
+
+        self.tf_fast = 60
+        self.tf_slow = 600
+
+        self._q = queue.Queue(maxsize=20000)
+        self._lock = threading.Lock()
+
+        self.builder_fast = InternalCandleBuilder(self.tf_fast)
+        self.builder_slow = InternalCandleBuilder(self.tf_slow)
+
+        self.hist_fast = CandleHistory(maxlen=400)
+        self.hist_slow = CandleHistory(maxlen=400)
+
+        self._last_fast_ts = None
+        self._last_slow_ts = None
+
+        self.last_tick = None
+        self._stream = None
+
+        self._last_sent_ts = 0.0  # антиспам (якщо треба)
+
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
         account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
