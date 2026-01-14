@@ -461,7 +461,7 @@ ENGINE = SignalEngine()
 SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 
 # ---------------- TELEGRAM TEXT FORMAT ----------------
-    def fmt_manual_signal(sig: dict) -> str:
+def fmt_manual_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
     if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
