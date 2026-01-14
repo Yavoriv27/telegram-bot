@@ -584,8 +584,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------- MAIN ----------------
-
-   def main():
+def main():
     import sys
 
     LOCK_FILE = "/tmp/bot.lock"
@@ -612,19 +611,15 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     app.add_handler(CommandHandler("auto_off", cmd_auto_off))
     app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
+    app.add_handler(CommandHandler("subs", cmd_subs))
 
-    app.job_queue.run_repeating(
-        auto_job,
-        interval=ENGINE.auto_every_sec,
-        first=10
-    )
+    app.job_queue.run_repeating(auto_job, interval=ENGINE.auto_every_sec, first=10)
 
     try:
         app.run_polling(drop_pending_updates=True)
     finally:
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
-
 
 if __name__ == "__main__":
     main()
