@@ -235,37 +235,7 @@ def adx(highs: List[float], lows: List[float], closes: List[float], period: int 
     for v in dxs[period:]:
         adx_val = (adx_val * (period - 1) + v) / period
     return adx_val
-# ---------------- SIGNAL ENGINE ----------------
 
-class SignalEngine:
-    def __init__(self):
-        self.symbol = os.getenv("SYMBOL", "EUR_USD")
-
-        self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
-        self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "300"))
-
-        # таймфрейми
-        self.tf_fast = 60     # 30 секунд
-        self.tf_slow = 600    # 5 хвилин
-
-        self._q = queue.Queue(maxsize=20000)
-        self._lock = threading.Lock()
-
-        self.builder_fast = InternalCandleBuilder(self.tf_fast)
-        self.builder_slow = InternalCandleBuilder(self.tf_slow)
-
-        self.hist_fast = CandleHistory(maxlen=400)
-        self.hist_slow = CandleHistory(maxlen=400)
-
-        self._last_fast_ts = None
-        self._last_slow_ts = None
-
-        self.last_tick = None
-        self._stream = None
-        self._last_sent_ts = 0.0
-self.cooldown_sec = int(os.getenv("COOLDOWN_SEC", "600"))  # 10 хв анти-спам
-self._last_dir = None
-self._last_slow_signal_candle = None
 
     # ---------- STREAM ----------
 class SignalEngine:
