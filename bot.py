@@ -2,12 +2,11 @@ import os
 import json
 import time
 import queue
-import math
 import threading
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 import requests
 from dotenv import load_dotenv
@@ -21,7 +20,7 @@ load_dotenv()
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("telegram_oanda_bot")
+log = logging.getLogger("telegram_oanda_multi_bot")
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 
@@ -32,10 +31,6 @@ def now_utc() -> datetime:
 
 def fmt_kyiv(dt_utc: datetime) -> str:
     return dt_utc.astimezone(KYIV_TZ).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def mean(xs: List[float]) -> float:
-    return sum(xs) / max(1, len(xs))
 
 
 # ---------------- CANDLES ----------------
@@ -121,7 +116,7 @@ class OandaPriceStream(threading.Thread):
         backoff = 2
         while not self._stop.is_set():
             try:
-                log.info("performing request %s", url)
+                log.info("performing request %s | %s", url, self.instrument)
                 with requests.get(url, headers=headers, params=params, stream=True, timeout=30) as r:
                     r.raise_for_status()
                     backoff = 2
@@ -135,9 +130,15 @@ class OandaPriceStream(threading.Thread):
                             bid = float(msg["bids"][0]["price"])
                             ask = float(msg["asks"][0]["price"])
                             mid = (bid + ask) / 2.0
-                            self.out_q.put({"ts": time.time(), "bid": bid, "ask": ask, "mid": mid})
+                            self.out_q.put({
+                                "ts": time.time(),
+                                "instrument": self.instrument,
+                                "bid": bid,
+                                "ask": ask,
+                                "mid": mid
+                            })
             except Exception as e:
-                log.warning("Stream error: %s (reconnect in %ss)", e, backoff)
+                log.warning("Stream error %s: %s (reconnect in %ss)", self.instrument, e, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30)
 
@@ -158,6 +159,16 @@ def rsi(values: List[float], period: int = 14) -> Optional[float]:
         return 100.0
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
+
+
+def ema(values: List[float], period: int) -> Optional[float]:
+    if len(values) < period:
+        return None
+    k = 2 / (period + 1)
+    e = values[0]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+    return e
 
 
 def adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> Optional[float]:
@@ -195,7 +206,7 @@ def adx(highs: List[float], lows: List[float], closes: List[float], period: int 
         di_m = 100 * (m14 / tr14)
         if di_p + di_m == 0:
             continue
-        dxs.append(100 * abs(di_p - di_m) / (di_p + di_m))
+        dxs.append(100 * abs(di_p - di_m) / (di_p - di_m) if (di_p + di_m) != 0 else 0)
 
     if len(dxs) < period:
         return None
@@ -206,20 +217,37 @@ def adx(highs: List[float], lows: List[float], closes: List[float], period: int 
     return adx_val
 
 
-# ---------------- SIGNAL ENGINE ----------------
+def price_action_score(last3: List[Candle], direction: str) -> int:
+    if len(last3) < 3:
+        return 0
 
-class SignalEngine:
-    def __init__(self):
-        self.symbol = os.getenv("SYMBOL", "EUR_USD")
+    ups = sum(1 for c in last3 if c.close > c.open)
+    downs = sum(1 for c in last3 if c.close < c.open)
 
-        self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
-        self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "15"))  # перевірка часто, але сигнал тільки 10хв
+    if direction == "BUY":
+        if ups == 3:
+            return 25
+        if ups == 2:
+            return 15
+        return 0
 
-        self.tf_fast = 60
-        self.tf_slow = 600  # ✅ 10 хв
+    if direction == "SELL":
+        if downs == 3:
+            return 25
+        if downs == 2:
+            return 15
+        return 0
 
-        self._q = queue.Queue(maxsize=20000)
-        self._lock = threading.Lock()
+    return 0
+
+
+# ---------------- SINGLE PAIR ENGINE ----------------
+
+class PairEngine:
+    def __init__(self, instrument: str, tf_fast: int = 60, tf_slow: int = 600):
+        self.instrument = instrument
+        self.tf_fast = tf_fast
+        self.tf_slow = tf_slow
 
         self.builder_fast = InternalCandleBuilder(self.tf_fast)
         self.builder_slow = InternalCandleBuilder(self.tf_slow)
@@ -230,70 +258,35 @@ class SignalEngine:
         self._last_fast_ts = None
         self._last_slow_ts = None
 
-        self.last_tick = None
-        self._stream = None
-
+        self.last_tick: Optional[dict] = None
         self._last_signal_candle_ts: Optional[float] = None
 
-    def start_stream(self):
-        api_key = (os.getenv("OANDA_API_KEY") or "").strip()
-        account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
-        env = (os.getenv("OANDA_ENV") or "practice").lower()
+    def on_tick(self, item: dict):
+        ts = float(item["ts"])
+        mid = float(item["mid"])
+        self.last_tick = item
 
-        if not api_key or not account_id:
-            raise RuntimeError("OANDA_API_KEY / OANDA_ACCOUNT_ID missing")
+        self.builder_fast.on_tick(ts, mid)
+        self.builder_slow.on_tick(ts, mid)
 
-        practice = env == "practice"
+        c_fast = self.builder_fast.last_closed
+        if c_fast and c_fast.start_ts != self._last_fast_ts:
+            self._last_fast_ts = c_fast.start_ts
+            self.hist_fast.append(c_fast)
 
-        self._stream = OandaPriceStream(
-            api_key=api_key,
-            account_id=account_id,
-            instrument=self.symbol,
-            out_q=self._q,
-            practice=practice,
-        )
-        self._stream.start()
-        threading.Thread(target=self._pump_ticks, daemon=True).start()
+        c_slow = self.builder_slow.last_closed
+        if c_slow and c_slow.start_ts != self._last_slow_ts:
+            self._last_slow_ts = c_slow.start_ts
+            self.hist_slow.append(c_slow)
 
-    def _pump_ticks(self):
-        while True:
-            item = self._q.get()
-            ts = float(item["ts"])
-            mid = float(item["mid"])
-
-            with self._lock:
-                self.last_tick = item
-
-                self.builder_fast.on_tick(ts, mid)
-                self.builder_slow.on_tick(ts, mid)
-
-                c_fast = self.builder_fast.last_closed
-                if c_fast and c_fast.start_ts != self._last_fast_ts:
-                    self._last_fast_ts = c_fast.start_ts
-                    self.hist_fast.append(c_fast)
-
-                c_slow = self.builder_slow.last_closed
-                if c_slow and c_slow.start_ts != self._last_slow_ts:
-                    self._last_slow_ts = c_slow.start_ts
-                    self.hist_slow.append(c_slow)
-
-    def snapshot(self):
-        with self._lock:
-            return {"last": self.last_tick, "fast": self.hist_fast.items(), "slow": self.hist_slow.items()}
-
-    def compute_signal(self):
-        snap = self.snapshot()
-        last = snap["last"]
-        slow = snap["slow"]
-
-        if not last or len(slow) < 30:
-            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+    def compute_signal(self, min_score: int, min_adx: float, rsi_buy: float, rsi_sell: float) -> Dict[str, Any]:
+        slow = self.hist_slow.items()
+        if not self.last_tick or len(slow) < 60:
+            return {"ok": False, "reason": "NOT_ENOUGH_DATA", "instrument": self.instrument}
 
         last_closed_slow = slow[-1]
-
-        # ✅ тільки 1 сигнал на одну закриту 10-хв свічку
         if self._last_signal_candle_ts == last_closed_slow.start_ts:
-            return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
+            return {"ok": False, "reason": "WAIT_NEXT_CANDLE", "instrument": self.instrument}
 
         closes = [c.close for c in slow]
         highs = [c.high for c in slow]
@@ -303,30 +296,147 @@ class SignalEngine:
         adx_v = adx(highs, lows, closes, 14)
 
         if rsi_v is None or adx_v is None:
-            return {"ok": False, "reason": "NO_DATA"}
+            return {"ok": False, "reason": "NO_DATA", "instrument": self.instrument}
 
-        if adx_v < 20:
-            return {"ok": False, "reason": "MARKET_FLAT"}
+        if adx_v < min_adx:
+            return {"ok": False, "reason": "MARKET_FLAT", "instrument": self.instrument}
+
+        ema20 = ema(closes[-120:], 20)
+        ema50 = ema(closes[-160:], 50)
+        if ema20 is None or ema50 is None:
+            return {"ok": False, "reason": "NO_EMA", "instrument": self.instrument}
+
+        trend = "BUY" if ema20 > ema50 else "SELL" if ema20 < ema50 else None
+        if trend is None:
+            return {"ok": False, "reason": "NO_TREND", "instrument": self.instrument}
 
         direction = None
-
-        if 60 <= rsi_v <= 66:
+        if trend == "BUY" and rsi_v >= rsi_buy:
             direction = "BUY"
-        elif 34 <= rsi_v <= 40:
+        elif trend == "SELL" and rsi_v <= rsi_sell:
             direction = "SELL"
+        else:
+            return {"ok": False, "reason": "NO_SIGNAL", "instrument": self.instrument}
 
-        if not direction:
-            return {"ok": False, "reason": "NO_SIGNAL"}
+        score = 0
+        parts = []
+
+        score += 25
+        parts.append("ADX сильний")
+
+        score += 25
+        parts.append("EMA тренд підтвердив")
+
+        score += 25
+        parts.append("RSI екстремум по тренду")
+
+        pa = price_action_score(slow[-3:], direction)
+        score += pa
+        if pa >= 25:
+            parts.append("3/3 свічки за напрямком")
+        elif pa >= 15:
+            parts.append("2/3 свічки за напрямком")
+        else:
+            parts.append("Свічки слабко підтвердили")
+
+        if score < min_score:
+            return {
+                "ok": False,
+                "reason": "WEAK_SCORE",
+                "instrument": self.instrument,
+                "score": score,
+                "rsi": round(rsi_v, 1),
+                "adx": round(adx_v, 1),
+            }
 
         self._last_signal_candle_ts = last_closed_slow.start_ts
 
         return {
             "ok": True,
+            "instrument": self.instrument,
             "direction": direction,
-            "expiry_sec": 600,  # ✅ 10 хв
+            "expiry_sec": 600,
+            "score": score,
+            "why": parts,
             "rsi": round(rsi_v, 1),
             "adx": round(adx_v, 1),
+            "ema20": round(ema20, 5),
+            "ema50": round(ema50, 5),
         }
+
+
+# ---------------- MULTI SIGNAL ENGINE ----------------
+
+class MultiSignalEngine:
+    def __init__(self):
+        self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
+        self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "15"))
+
+        self.instruments = ["EUR_USD", "GBP_USD", "USD_JPY"]
+
+        self.min_adx = float(os.getenv("MIN_ADX", "25"))
+        self.rsi_buy = float(os.getenv("RSI_BUY", "68"))
+        self.rsi_sell = float(os.getenv("RSI_SELL", "32"))
+        self.min_score = int(os.getenv("MIN_SCORE", "88"))
+
+        self._q = queue.Queue(maxsize=20000)
+        self._lock = threading.Lock()
+
+        self.pairs: Dict[str, PairEngine] = {ins: PairEngine(ins) for ins in self.instruments}
+
+        self._streams: List[OandaPriceStream] = []
+        self._last_best_signal_ts: Optional[float] = None
+
+    def start_streams(self):
+        api_key = (os.getenv("OANDA_API_KEY") or "").strip()
+        account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
+        env = (os.getenv("OANDA_ENV") or "practice").lower()
+
+        if not api_key or not account_id:
+            raise RuntimeError("OANDA_API_KEY / OANDA_ACCOUNT_ID missing")
+
+        practice = env == "practice"
+
+        for ins in self.instruments:
+            stream = OandaPriceStream(api_key, account_id, ins, self._q, practice=practice)
+            stream.start()
+            self._streams.append(stream)
+
+        threading.Thread(target=self._pump_ticks, daemon=True).start()
+
+    def _pump_ticks(self):
+        while True:
+            item = self._q.get()
+            ins = item.get("instrument")
+            if ins not in self.pairs:
+                continue
+            with self._lock:
+                self.pairs[ins].on_tick(item)
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            data = {}
+            for ins, pe in self.pairs.items():
+                data[ins] = {
+                    "last": pe.last_tick,
+                    "slow": pe.hist_slow.items()
+                }
+            return data
+
+    def compute_best_signal(self) -> Dict[str, Any]:
+        with self._lock:
+            candidates = []
+            for ins, pe in self.pairs.items():
+                sig = pe.compute_signal(self.min_score, self.min_adx, self.rsi_buy, self.rsi_sell)
+                if sig.get("ok"):
+                    candidates.append(sig)
+
+            if not candidates:
+                return {"ok": False, "reason": "NO_BEST_SIGNAL"}
+
+            candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+            best = candidates[0]
+            return best
 
 
 # ---------------- SUBSCRIBERS ----------------
@@ -371,37 +481,35 @@ class Subscribers:
         return list(self._ids)
 
 
-ENGINE = SignalEngine()
+ENGINE = MultiSignalEngine()
 SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 
 
 # ---------------- TELEGRAM TEXT FORMAT ----------------
 
-def fmt_manual_signal(sig: dict) -> str:
+def fmt_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
     if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
         arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
+        why = "\n".join([f"• {x}" for x in sig.get("why", [])])
+        ins = sig.get("instrument", "UNKNOWN")
         return (
-            f"{arrow}\n"
+            f"{arrow} | <b>{ins}</b>\n"
             f"⏱ <b>Експірація:</b> 10 хв\n"
             f"🕒 <b>Kyiv:</b> {t}\n"
+            f"📊 <b>Ймовірність:</b> {sig.get('score', 0)}%\n\n"
             f"<b>RSI(14):</b> {sig['rsi']}\n"
-            f"<b>ADX(14):</b> {sig['adx']}"
+            f"<b>ADX(14):</b> {sig['adx']}\n"
+            f"<b>EMA20:</b> {sig['ema20']}\n"
+            f"<b>EMA50:</b> {sig['ema50']}\n\n"
+            f"<b>Підтвердження:</b>\n{why}"
         )
-
-    reasons = {
-        "NOT_ENOUGH_DATA": "⏳ Недостатньо свічок (бот тільки запустився)",
-        "WAIT_NEXT_CANDLE": "⏳ Чекаю закриття нової 10-хв свічки",
-        "MARKET_FLAT": "🟡 Ринок слабкий (ADX низький)",
-        "NO_SIGNAL": "😐 Немає переваги по RSI",
-        "NO_DATA": "❌ Індикатори не порахувались",
-    }
 
     return (
         "❌ <b>Сигналу немає</b>\n"
         f"🕒 <b>Kyiv:</b> {t}\n"
-        f"{reasons.get(sig.get('reason'), sig.get('reason'))}"
+        "Сильного сетапу немає (Score < 88%)"
     )
 
 
@@ -409,8 +517,10 @@ def fmt_manual_signal(sig: dict) -> str:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "✅ Бот запущено.\n"
-        "Сигнали: тільки після закриття 10-хв свічки.\n\n"
+        "✅ Бот запущено (3 пари).\n"
+        "Сигнали: тільки після закриття 10-хв свічки.\n"
+        "Фільтр: тільки дуже сильні сигнали (Score ≥ 88%).\n\n"
+        "Пари: EUR_USD, GBP_USD, USD_JPY\n\n"
         "Команди:\n"
         "/status\n"
         "/signal\n"
@@ -425,24 +535,25 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     snap = ENGINE.snapshot()
     t = fmt_kyiv(now_utc())
-    slow = snap["slow"]
-    last = snap.get("last")
 
-    msg = (
-        "<b>СТАТУС БОТА</b>\n"
-        f"🕒 <b>Kyiv:</b> {t}\n"
-        f"⚙️ <b>Авто:</b> {'ON' if ENGINE.auto_enabled else 'OFF'}\n"
-        f"🕯️ <b>10-хв свічок:</b> {len(slow)}"
-    )
-    if last:
-        msg += f"\nTick: bid={last['bid']:.5f} ask={last['ask']:.5f}"
+    lines = [
+        "<b>СТАТУС БОТА</b>",
+        f"🕒 <b>Kyiv:</b> {t}",
+        f"⚙️ <b>Авто:</b> {'ON' if ENGINE.auto_enabled else 'OFF'}",
+        f"🎯 <b>Поріг сигналу:</b> {ENGINE.min_score}%",
+        ""
+    ]
 
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    for ins, d in snap.items():
+        n = len(d.get("slow", []))
+        lines.append(f"🕯️ <b>{ins}:</b> 10-хв свічок = {n}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sig = ENGINE.compute_signal()
-    await update.message.reply_text(fmt_manual_signal(sig), parse_mode=ParseMode.HTML)
+    sig = ENGINE.compute_best_signal()
+    await update.message.reply_text(fmt_signal(sig), parse_mode=ParseMode.HTML)
 
 
 async def cmd_auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -481,11 +592,11 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     if not ENGINE.auto_enabled:
         return
 
-    sig = ENGINE.compute_signal()
+    sig = ENGINE.compute_best_signal()
     if not sig.get("ok"):
         return
 
-    msg = fmt_manual_signal(sig)
+    msg = fmt_signal(sig)
     for cid in SUBS.list():
         await context.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
 
@@ -497,7 +608,6 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN missing")
 
-    # ✅ single instance lock (щоб не було 409 Conflict)
     lock_path = "/tmp/telegram_bot.lock"
     if os.path.exists(lock_path):
         log.error("Bot already running (lock exists). Remove lock if it's stale: %s", lock_path)
@@ -506,7 +616,7 @@ def main():
         f.write(str(os.getpid()))
 
     try:
-        ENGINE.start_stream()
+        ENGINE.start_streams()
 
         app = Application.builder().token(token).build()
 
