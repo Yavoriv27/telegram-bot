@@ -206,7 +206,7 @@ def adx(highs: List[float], lows: List[float], closes: List[float], period: int 
         di_m = 100 * (m14 / tr14)
         if di_p + di_m == 0:
             continue
-        dxs.append(100 * abs(di_p - di_m) / (di_p - di_m) if (di_p + di_m) != 0 else 0)
+        dxs.append(100 * abs(di_p - di_m) / (di_p + di_m))
 
     if len(dxs) < period:
         return None
@@ -239,6 +239,14 @@ def price_action_score(last3: List[Candle], direction: str) -> int:
         return 0
 
     return 0
+
+
+def pip_size(instrument: str) -> float:
+    return 0.01 if "JPY" in instrument else 0.0001
+
+
+def candle_body_pips(c: Candle, instrument: str) -> float:
+    return abs(c.close - c.open) / pip_size(instrument)
 
 
 # ---------------- SINGLE PAIR ENGINE ----------------
@@ -279,7 +287,7 @@ class PairEngine:
             self._last_slow_ts = c_slow.start_ts
             self.hist_slow.append(c_slow)
 
-    def compute_signal(self, min_score: int, min_adx: float, rsi_buy: float, rsi_sell: float) -> Dict[str, Any]:
+    def compute_signal(self, min_score: int, min_adx: float, rsi_buy: float, rsi_sell: float, min_body_pips: float) -> Dict[str, Any]:
         slow = self.hist_slow.items()
         if not self.last_tick or len(slow) < 60:
             return {"ok": False, "reason": "NOT_ENOUGH_DATA", "instrument": self.instrument}
@@ -287,6 +295,10 @@ class PairEngine:
         last_closed_slow = slow[-1]
         if self._last_signal_candle_ts == last_closed_slow.start_ts:
             return {"ok": False, "reason": "WAIT_NEXT_CANDLE", "instrument": self.instrument}
+
+        body = candle_body_pips(last_closed_slow, self.instrument)
+        if body < min_body_pips:
+            return {"ok": False, "reason": "LOW_IMPULSE", "instrument": self.instrument}
 
         closes = [c.close for c in slow]
         highs = [c.high for c in slow]
@@ -374,18 +386,22 @@ class MultiSignalEngine:
 
         self.instruments = ["EUR_USD", "GBP_USD", "USD_JPY"]
 
-        self.min_adx = float(os.getenv("MIN_ADX", "25"))
+        self.min_adx = float(os.getenv("MIN_ADX", "30"))
         self.rsi_buy = float(os.getenv("RSI_BUY", "68"))
         self.rsi_sell = float(os.getenv("RSI_SELL", "32"))
         self.min_score = int(os.getenv("MIN_SCORE", "88"))
+        self.min_body_pips = float(os.getenv("MIN_BODY_PIPS", "2.0"))
+
+        self.cooldown_after_losses = int(os.getenv("COOLDOWN_AFTER_LOSSES", "2"))
+        self.cooldown_minutes = int(os.getenv("COOLDOWN_MINUTES", "30"))
+        self.consecutive_losses = 0
+        self.cooldown_until_ts: Optional[float] = None
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
 
         self.pairs: Dict[str, PairEngine] = {ins: PairEngine(ins) for ins in self.instruments}
-
         self._streams: List[OandaPriceStream] = []
-        self._last_best_signal_ts: Optional[float] = None
 
     def start_streams(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
@@ -424,10 +440,20 @@ class MultiSignalEngine:
             return data
 
     def compute_best_signal(self) -> Dict[str, Any]:
+        now_ts = time.time()
+        if self.cooldown_until_ts and now_ts < self.cooldown_until_ts:
+            return {"ok": False, "reason": "COOLDOWN"}
+
         with self._lock:
             candidates = []
             for ins, pe in self.pairs.items():
-                sig = pe.compute_signal(self.min_score, self.min_adx, self.rsi_buy, self.rsi_sell)
+                sig = pe.compute_signal(
+                    self.min_score,
+                    self.min_adx,
+                    self.rsi_buy,
+                    self.rsi_sell,
+                    self.min_body_pips
+                )
                 if sig.get("ok"):
                     candidates.append(sig)
 
@@ -435,8 +461,16 @@ class MultiSignalEngine:
                 return {"ok": False, "reason": "NO_BEST_SIGNAL"}
 
             candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
-            best = candidates[0]
-            return best
+            return candidates[0]
+
+    def record_win(self):
+        self.consecutive_losses = 0
+
+    def record_loss(self):
+        self.consecutive_losses += 1
+        if self.consecutive_losses >= self.cooldown_after_losses:
+            self.cooldown_until_ts = time.time() + self.cooldown_minutes * 60
+            self.consecutive_losses = 0
 
 
 # ---------------- SUBSCRIBERS ----------------
@@ -490,6 +524,13 @@ SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 def fmt_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
+    if sig.get("reason") == "COOLDOWN":
+        return (
+            "⏸ <b>Пауза</b>\n"
+            f"🕒 <b>Kyiv:</b> {t}\n"
+            "Пауза після серії мінусів (захист депозиту)."
+        )
+
     if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
         arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
         why = "\n".join([f"• {x}" for x in sig.get("why", [])])
@@ -506,10 +547,15 @@ def fmt_signal(sig: dict) -> str:
             f"<b>Підтвердження:</b>\n{why}"
         )
 
+    reasons = {
+        "NO_BEST_SIGNAL": "Сильного сетапу немає (Score < 88%)",
+        "LOW_IMPULSE": "Слабкий імпульс (свічка дуже маленька) — пропускаю",
+    }
+
     return (
         "❌ <b>Сигналу немає</b>\n"
         f"🕒 <b>Kyiv:</b> {t}\n"
-        "Сильного сетапу немає (Score < 88%)"
+        f"{reasons.get(sig.get('reason'), 'Немає сильного сигналу')}"
     )
 
 
@@ -519,7 +565,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✅ Бот запущено (3 пари).\n"
         "Сигнали: тільки після закриття 10-хв свічки.\n"
-        "Фільтр: тільки дуже сильні сигнали (Score ≥ 88%).\n\n"
+        "Фільтр: Score ≥ 88%, ADX ≥ 30, імпульс-фільтр.\n"
+        "Є захист депозиту: пауза після 2 мінусів.\n\n"
         "Пари: EUR_USD, GBP_USD, USD_JPY\n\n"
         "Команди:\n"
         "/status\n"
@@ -528,7 +575,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/auto_off\n"
         "/subscribe\n"
         "/unsubscribe\n"
-        "/subs"
+        "/subs\n"
+        "/win\n"
+        "/loss"
     )
 
 
@@ -541,6 +590,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🕒 <b>Kyiv:</b> {t}",
         f"⚙️ <b>Авто:</b> {'ON' if ENGINE.auto_enabled else 'OFF'}",
         f"🎯 <b>Поріг сигналу:</b> {ENGINE.min_score}%",
+        f"📈 <b>MIN_ADX:</b> {ENGINE.min_adx}",
+        f"⚡ <b>MIN_BODY:</b> {ENGINE.min_body_pips} pips",
         ""
     ]
 
@@ -586,6 +637,19 @@ async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"👥 Підписників: {len(SUBS.list())}")
 
 
+async def cmd_win(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ENGINE.record_win()
+    await update.message.reply_text("✅ Записано: ПЛЮС")
+
+
+async def cmd_loss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ENGINE.record_loss()
+    if ENGINE.cooldown_until_ts and time.time() < ENGINE.cooldown_until_ts:
+        await update.message.reply_text(f"❌ Записано: МІНУС\n⏸ Пауза {ENGINE.cooldown_minutes} хв")
+    else:
+        await update.message.reply_text("❌ Записано: МІНУС")
+
+
 # ---------------- AUTO JOB ----------------
 
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
@@ -603,17 +667,36 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- MAIN ----------------
 
+def acquire_lock(lock_path: str):
+    if os.path.exists(lock_path):
+        try:
+            with open(lock_path, "r", encoding="utf-8") as f:
+                old_pid = int((f.read() or "").strip())
+            os.kill(old_pid, 0)
+            log.error("Bot already running with PID=%s", old_pid)
+            raise SystemExit(0)
+        except ProcessLookupError:
+            try:
+                os.remove(lock_path)
+            except Exception:
+                pass
+        except Exception:
+            try:
+                os.remove(lock_path)
+            except Exception:
+                pass
+
+    with open(lock_path, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+
+
 def main():
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN missing")
 
     lock_path = "/tmp/telegram_bot.lock"
-    if os.path.exists(lock_path):
-        log.error("Bot already running (lock exists). Remove lock if it's stale: %s", lock_path)
-        raise SystemExit(0)
-    with open(lock_path, "w", encoding="utf-8") as f:
-        f.write(str(os.getpid()))
+    acquire_lock(lock_path)
 
     try:
         ENGINE.start_streams()
@@ -628,6 +711,8 @@ def main():
         app.add_handler(CommandHandler("subscribe", cmd_subscribe))
         app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
         app.add_handler(CommandHandler("subs", cmd_subs))
+        app.add_handler(CommandHandler("win", cmd_win))
+        app.add_handler(CommandHandler("loss", cmd_loss))
 
         app.job_queue.run_repeating(auto_job, interval=ENGINE.auto_every_sec, first=10)
 
