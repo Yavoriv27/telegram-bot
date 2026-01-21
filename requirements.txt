@@ -3,5 +3,5 @@ requests
 python-dotenv
 pytz
 pillow
-opencv-python
+opencv-python-headless
 pytesseract
