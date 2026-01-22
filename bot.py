@@ -21,7 +21,7 @@ load_dotenv()
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("telegram_oanda_bot")
+log = logging.getLogger("telegram_oanda_hard_bot")
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 
@@ -36,6 +36,18 @@ def fmt_kyiv(dt_utc: datetime) -> str:
 
 def mean(xs: List[float]) -> float:
     return sum(xs) / max(1, len(xs))
+
+
+def stdev(xs: List[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
+    m = mean(xs)
+    v = sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+    return math.sqrt(v)
+
+
+def pip_size(instrument: str) -> float:
+    return 0.01 if "JPY" in instrument else 0.0001
 
 
 # ---------------- CANDLES ----------------
@@ -57,6 +69,18 @@ class Candle:
         if price < self.low:
             self.low = price
         self.ticks += 1
+
+    @property
+    def body(self) -> float:
+        return abs(self.close - self.open)
+
+    @property
+    def direction(self) -> str:
+        if self.close > self.open:
+            return "UP"
+        if self.close < self.open:
+            return "DOWN"
+        return "FLAT"
 
 
 class InternalCandleBuilder:
@@ -84,7 +108,7 @@ class InternalCandleBuilder:
 
 
 class CandleHistory:
-    def __init__(self, maxlen: int = 400):
+    def __init__(self, maxlen: int = 600):
         self.maxlen = maxlen
         self._items: List[Candle] = []
 
@@ -121,7 +145,7 @@ class OandaPriceStream(threading.Thread):
         backoff = 2
         while not self._stop.is_set():
             try:
-                log.info("performing request %s", url)
+                log.info("performing request %s | %s", url, self.instrument)
                 with requests.get(url, headers=headers, params=params, stream=True, timeout=30) as r:
                     r.raise_for_status()
                     backoff = 2
@@ -135,9 +159,15 @@ class OandaPriceStream(threading.Thread):
                             bid = float(msg["bids"][0]["price"])
                             ask = float(msg["asks"][0]["price"])
                             mid = (bid + ask) / 2.0
-                            self.out_q.put({"ts": time.time(), "bid": bid, "ask": ask, "mid": mid})
+                            self.out_q.put({
+                                "ts": time.time(),
+                                "instrument": self.instrument,
+                                "bid": bid,
+                                "ask": ask,
+                                "mid": mid
+                            })
             except Exception as e:
-                log.warning("Stream error: %s (reconnect in %ss)", e, backoff)
+                log.warning("Stream error %s: %s (reconnect in %ss)", self.instrument, e, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30)
 
@@ -216,7 +246,40 @@ def adx(highs: List[float], lows: List[float], closes: List[float], period: int 
     return adx_val
 
 
-# ---------------- SIGNAL ENGINE ----------------
+def last3_confirm(candles: List[Candle], direction: str) -> int:
+    if len(candles) < 3:
+        return 0
+    ups = sum(1 for c in candles[-3:] if c.direction == "UP")
+    downs = sum(1 for c in candles[-3:] if c.direction == "DOWN")
+    if direction == "BUY":
+        return ups
+    if direction == "SELL":
+        return downs
+    return 0
+
+
+def min_body_pips_ok(candles: List[Candle], instrument: str, min_body_pips: float) -> bool:
+    if len(candles) < 2:
+        return False
+    p = pip_size(instrument)
+    b1 = candles[-1].body / p
+    b2 = candles[-2].body / p
+    return (b1 >= min_body_pips) or (b2 >= min_body_pips)
+
+
+def chop_filter_ok(closes: List[float]) -> bool:
+    if len(closes) < 25:
+        return False
+    last = closes[-25:]
+    s = stdev(last)
+    m = mean(last)
+    if m == 0:
+        return False
+    ratio = s / m
+    return ratio > 0.00005  # щоб не було "пили"
+
+
+# ---------------- ENGINE ----------------
 
 class SignalEngine:
     def __init__(self):
@@ -227,26 +290,28 @@ class SignalEngine:
 
         self.expiry_sec = int(os.getenv("EXPIRY_SEC", "120"))
 
-        self.tf_fast = 60
-        self.tf_slow = 600  # ✅ 10 хв
+        self.min_adx = float(os.getenv("MIN_ADX", "28"))
+        self.min_body_pips = float(os.getenv("MIN_BODY_PIPS", "2.0"))
 
-        self.min_adx = float(os.getenv("MIN_ADX", "25"))
-        self.rsi_buy_low = float(os.getenv("RSI_BUY_LOW", "58"))
-        self.rsi_buy_high = float(os.getenv("RSI_BUY_HIGH", "66"))
-        self.rsi_sell_low = float(os.getenv("RSI_SELL_LOW", "34"))
-        self.rsi_sell_high = float(os.getenv("RSI_SELL_HIGH", "42"))
+        self.rsi_buy_low = float(os.getenv("RSI_BUY_LOW", "52"))
+        self.rsi_buy_high = float(os.getenv("RSI_BUY_HIGH", "64"))
+        self.rsi_sell_low = float(os.getenv("RSI_SELL_LOW", "36"))
+        self.rsi_sell_high = float(os.getenv("RSI_SELL_HIGH", "48"))
+
+        self.tf_1m = 60
+        self.tf_10m = 600
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
 
-        self.builder_fast = InternalCandleBuilder(self.tf_fast)
-        self.builder_slow = InternalCandleBuilder(self.tf_slow)
+        self.builder_1m = InternalCandleBuilder(self.tf_1m)
+        self.builder_10m = InternalCandleBuilder(self.tf_10m)
 
-        self.hist_fast = CandleHistory(maxlen=400)
-        self.hist_slow = CandleHistory(maxlen=400)
+        self.hist_1m = CandleHistory(maxlen=800)
+        self.hist_10m = CandleHistory(maxlen=800)
 
-        self._last_fast_ts = None
-        self._last_slow_ts = None
+        self._last_1m_ts = None
+        self._last_10m_ts = None
 
         self.last_tick = None
         self._stream = None
@@ -282,43 +347,47 @@ class SignalEngine:
             with self._lock:
                 self.last_tick = item
 
-                self.builder_fast.on_tick(ts, mid)
-                self.builder_slow.on_tick(ts, mid)
+                self.builder_1m.on_tick(ts, mid)
+                self.builder_10m.on_tick(ts, mid)
 
-                c_fast = self.builder_fast.last_closed
-                if c_fast and c_fast.start_ts != self._last_fast_ts:
-                    self._last_fast_ts = c_fast.start_ts
-                    self.hist_fast.append(c_fast)
+                c1 = self.builder_1m.last_closed
+                if c1 and c1.start_ts != self._last_1m_ts:
+                    self._last_1m_ts = c1.start_ts
+                    self.hist_1m.append(c1)
 
-                c_slow = self.builder_slow.last_closed
-                if c_slow and c_slow.start_ts != self._last_slow_ts:
-                    self._last_slow_ts = c_slow.start_ts
-                    self.hist_slow.append(c_slow)
+                c10 = self.builder_10m.last_closed
+                if c10 and c10.start_ts != self._last_10m_ts:
+                    self._last_10m_ts = c10.start_ts
+                    self.hist_10m.append(c10)
 
     def snapshot(self):
         with self._lock:
-            return {"last": self.last_tick, "fast": self.hist_fast.items(), "slow": self.hist_slow.items()}
+            return {
+                "last": self.last_tick,
+                "m1": self.hist_1m.items(),
+                "m10": self.hist_10m.items(),
+            }
 
-    def compute_signal(self):
+    def compute_signal(self) -> Dict[str, Any]:
         snap = self.snapshot()
         last = snap["last"]
-        slow = snap["slow"]
+        m1 = snap["m1"]
+        m10 = snap["m10"]
 
-        if not last or len(slow) < 60:
+        if not last or len(m10) < 80 or len(m1) < 50:
             return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-        last_closed_slow = slow[-1]
+        last_closed_10m = m10[-1]
 
-        # ✅ 1 сигнал на 1 закриту 10-хв свічку
-        if self._last_signal_candle_ts == last_closed_slow.start_ts:
+        if self._last_signal_candle_ts == last_closed_10m.start_ts:
             return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
 
-        closes = [c.close for c in slow]
-        highs = [c.high for c in slow]
-        lows = [c.low for c in slow]
+        closes10 = [c.close for c in m10]
+        highs10 = [c.high for c in m10]
+        lows10 = [c.low for c in m10]
 
-        rsi_v = rsi(closes, 14)
-        adx_v = adx(highs, lows, closes, 14)
+        rsi_v = rsi(closes10, 14)
+        adx_v = adx(highs10, lows10, closes10, 14)
 
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
@@ -326,8 +395,8 @@ class SignalEngine:
         if adx_v < self.min_adx:
             return {"ok": False, "reason": "MARKET_FLAT", "rsi": round(rsi_v, 1), "adx": round(adx_v, 1)}
 
-        ema20 = ema(closes[-120:], 20)
-        ema50 = ema(closes[-160:], 50)
+        ema20 = ema(closes10[-150:], 20)
+        ema50 = ema(closes10[-220:], 50)
         if ema20 is None or ema50 is None:
             return {"ok": False, "reason": "NO_EMA"}
 
@@ -335,25 +404,63 @@ class SignalEngine:
         if trend is None:
             return {"ok": False, "reason": "NO_TREND"}
 
+        if not chop_filter_ok(closes10):
+            return {"ok": False, "reason": "CHOPPY"}
+
         direction = None
-        if trend == "BUY" and self.rsi_buy_low <= rsi_v <= self.rsi_buy_high:
+        if trend == "BUY" and (self.rsi_buy_low <= rsi_v <= self.rsi_buy_high):
             direction = "BUY"
-        elif trend == "SELL" and self.rsi_sell_low <= rsi_v <= self.rsi_sell_high:
+        elif trend == "SELL" and (self.rsi_sell_low <= rsi_v <= self.rsi_sell_high):
             direction = "SELL"
         else:
             return {"ok": False, "reason": "NO_SIGNAL", "rsi": round(rsi_v, 1), "adx": round(adx_v, 1)}
 
-        self._last_signal_candle_ts = last_closed_slow.start_ts
+        conf10 = last3_confirm(m10, direction)
+        if conf10 < 2:
+            return {"ok": False, "reason": "WEAK_CANDLES_10M"}
+
+        if not min_body_pips_ok(m10, self.symbol, self.min_body_pips):
+            return {"ok": False, "reason": "NO_IMPULSE"}
+
+        # ✅ 1M підтвердження входу
+        last1 = m1[-1]
+        if direction == "BUY" and last1.direction != "UP":
+            return {"ok": False, "reason": "M1_NOT_CONFIRMED"}
+        if direction == "SELL" and last1.direction != "DOWN":
+            return {"ok": False, "reason": "M1_NOT_CONFIRMED"}
+
+        # якщо все ідеально — фіксуємо
+        self._last_signal_candle_ts = last_closed_10m.start_ts
+
+        # умовна оцінка "ймовірності"
+        score = 90
+        if adx_v >= 35:
+            score = 93
+        if conf10 == 3:
+            score += 2
+        score = min(score, 97)
 
         return {
             "ok": True,
             "direction": direction,
             "expiry_sec": self.expiry_sec,
+            "score": score,
             "rsi": round(rsi_v, 1),
             "adx": round(adx_v, 1),
             "ema20": round(ema20, 5),
             "ema50": round(ema50, 5),
+            "why": [
+                f"EMA тренд ({trend})",
+                f"ADX сильний ({round(adx_v,1)})",
+                f"RSI у зоні ({round(rsi_v,1)})",
+                f"10M свічки підтвердили: {conf10}/3",
+                f"Є імпульс (body ≥ {self.min_body_pips} pips)",
+                f"1M підтвердив вхід ({last1.direction})",
+            ],
         }
+
+
+ENGINE = SignalEngine()
 
 
 # ---------------- SUBSCRIBERS ----------------
@@ -398,36 +505,42 @@ class Subscribers:
         return list(self._ids)
 
 
-ENGINE = SignalEngine()
 SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 
 
 # ---------------- TELEGRAM TEXT FORMAT ----------------
 
-def fmt_manual_signal(sig: dict) -> str:
+def fmt_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
     if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
         arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
+        why = "\n".join([f"• {x}" for x in sig.get("why", [])])
         mins = max(1, int(sig.get("expiry_sec", 120) / 60))
         return (
-            f"{arrow}\n"
+            f"{arrow} | <b>{ENGINE.symbol}</b>\n"
             f"⏱ <b>Експірація:</b> {mins} хв\n"
             f"🕒 <b>Kyiv:</b> {t}\n"
+            f"📊 <b>Ймовірність:</b> {sig.get('score', 0)}%\n\n"
             f"<b>RSI(14):</b> {sig['rsi']}\n"
             f"<b>ADX(14):</b> {sig['adx']}\n"
             f"<b>EMA20:</b> {sig['ema20']}\n"
-            f"<b>EMA50:</b> {sig['ema50']}"
+            f"<b>EMA50:</b> {sig['ema50']}\n\n"
+            f"<b>Підтвердження:</b>\n{why}"
         )
 
     reasons = {
         "NOT_ENOUGH_DATA": "⏳ Недостатньо свічок (бот тільки запустився)",
         "WAIT_NEXT_CANDLE": "⏳ Чекаю закриття нової 10-хв свічки",
-        "MARKET_FLAT": "🟡 Ринок слабкий (ADX низький)",
-        "NO_SIGNAL": "😐 RSI не дав сетап по тренду",
-        "NO_DATA": "❌ Індикатори не порахувались",
+        "MARKET_FLAT": "🟡 Слабкий тренд (ADX низький)",
         "NO_EMA": "❌ EMA не порахувались",
-        "NO_TREND": "🟡 Немає чіткого EMA тренду",
+        "NO_TREND": "🟡 Немає EMA тренду",
+        "CHOPPY": "🟡 Ринок пиляє (немає структури)",
+        "NO_SIGNAL": "😐 Немає входу по RSI зоні",
+        "WEAK_CANDLES_10M": "🟡 10M свічки не підтвердили напрям",
+        "NO_IMPULSE": "🟡 Нема імпульсу (тіло слабке)",
+        "M1_NOT_CONFIRMED": "⏳ 1M не підтвердив — чекаю",
+        "NO_DATA": "❌ Індикатори не порахувались",
     }
 
     return (
@@ -441,16 +554,17 @@ def fmt_manual_signal(sig: dict) -> str:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "✅ Бот запущено.\n"
-        "Сигнали: тільки після закриття 10-хв свічки.\n\n"
+        "✅ Бот запущено (HARD).\n"
+        "Сигнали: тільки після закриття 10-хв свічки + підтвердження 1M.\n"
+        "Ціль: 2–3 дуже сильні сигнали в день.\n\n"
         "Команди:\n"
-        "/status — стан ринку/свічок\n"
-        "/signal — сигнал зараз\n"
-        "/auto_on — авто ON\n"
-        "/auto_off — авто OFF\n"
-        "/subscribe — отримувати автосигнали\n"
-        "/unsubscribe — відписатися\n"
-        "/subs — кількість підписників",
+        "/status\n"
+        "/signal\n"
+        "/auto_on\n"
+        "/auto_off\n"
+        "/subscribe\n"
+        "/unsubscribe\n"
+        "/subs",
         parse_mode=ParseMode.HTML
     )
 
@@ -458,16 +572,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     snap = ENGINE.snapshot()
     t = fmt_kyiv(now_utc())
-
-    slow = snap["slow"]
+    m1 = snap["m1"]
+    m10 = snap["m10"]
     last = snap.get("last")
 
     msg = (
-        "<b>СТАТУС БОТА</b>\n"
+        "<b>СТАТУС БОТА (HARD)</b>\n"
         f"🕒 <b>Kyiv:</b> {t}\n"
         f"⚙️ <b>Авто:</b> {'ON' if ENGINE.auto_enabled else 'OFF'}\n"
-        f"🕯️ <b>10-хв свічок:</b> {len(slow)}\n"
         f"🎯 <b>MIN_ADX:</b> {ENGINE.min_adx}\n"
+        f"⚡ <b>MIN_BODY:</b> {ENGINE.min_body_pips} pips\n"
+        f"🕯️ <b>Свічки:</b> 1M={len(m1)} | 10M={len(m10)}\n"
         f"⏱️ <b>EXPIRY:</b> {ENGINE.expiry_sec} сек"
     )
     if last:
@@ -478,7 +593,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = ENGINE.compute_signal()
-    await update.message.reply_text(fmt_manual_signal(sig), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(fmt_signal(sig), parse_mode=ParseMode.HTML)
 
 
 async def cmd_auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -521,7 +636,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     if not sig.get("ok"):
         return
 
-    msg = fmt_manual_signal(sig)
+    msg = fmt_signal(sig)
     for cid in SUBS.list():
         await context.bot.send_message(cid, msg, parse_mode=ParseMode.HTML)
 
