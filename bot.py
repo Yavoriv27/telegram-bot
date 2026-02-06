@@ -374,7 +374,7 @@ class SignalEngine:
         m1 = snap["m1"]
         m10 = snap["m10"]
 
-        if not last or len(m10) < 80 or len(m1) < 50:
+        if not last or len(m10) < 25 or len(m1) < 30:
             return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
         last_closed_10m = m10[-1]
