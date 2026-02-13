@@ -372,11 +372,11 @@ class SignalEngine:
                 "m10": self.hist_10m.items(),
             }
 
-            def compute_signal(self) -> Dict[str, Any]:
-            snap = self.snapshot()
-            last = snap["last"]
-            m1 = snap["m1"]
-            m10 = snap["m10"]
+    def compute_signal(self) -> Dict[str, Any]:
+        snap = self.snapshot()
+        last = snap["last"]
+        m1 = snap["m1"]
+        m10 = snap["m10"]
     
             if not last or len(m10) < 25 or len(m1) < 30:
                 return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
