@@ -318,6 +318,10 @@ class SignalEngine:
 
         self._last_signal_candle_ts: Optional[float] = None
 
+        self.prev_adx = None
+        self.last_direction = None
+        self.repeat_count = 0
+        
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
         account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
@@ -368,7 +372,7 @@ class SignalEngine:
                 "m10": self.hist_10m.items(),
             }
 
-    def compute_signal(self) -> Dict[str, Any]:
+        def compute_signal(self) -> Dict[str, Any]:
         snap = self.snapshot()
         last = snap["last"]
         m1 = snap["m1"]
@@ -392,52 +396,68 @@ class SignalEngine:
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
 
-        if adx_v < self.min_adx:
-            return {"ok": False, "reason": "MARKET_FLAT", "rsi": round(rsi_v, 1), "adx": round(adx_v, 1)}
-
         ema20 = ema(closes10[-150:], 20)
         ema50 = ema(closes10[-220:], 50)
         if ema20 is None or ema50 is None:
             return {"ok": False, "reason": "NO_EMA"}
 
-        trend = "BUY" if ema20 > ema50 else "SELL" if ema20 < ema50 else None
-        if trend is None:
-            return {"ok": False, "reason": "NO_TREND"}
-
-        if not chop_filter_ok(closes10):
-            return {"ok": False, "reason": "CHOPPY"}
-
-        direction = None
-        if trend == "BUY" and (self.rsi_buy_low <= rsi_v <= self.rsi_buy_high):
-            direction = "BUY"
-        elif trend == "SELL" and (self.rsi_sell_low <= rsi_v <= self.rsi_sell_high):
-            direction = "SELL"
-        else:
-            return {"ok": False, "reason": "NO_SIGNAL", "rsi": round(rsi_v, 1), "adx": round(adx_v, 1)}
+        direction = "BUY" if ema20 > ema50 else "SELL"
 
         conf10 = last3_confirm(m10, direction)
-        if conf10 < 2:
-            return {"ok": False, "reason": "WEAK_CANDLES_10M"}
 
-        if not min_body_pips_ok(m10, self.symbol, self.min_body_pips):
-            return {"ok": False, "reason": "NO_IMPULSE"}
+        # ---------- ADX GROWTH ----------
+        adx_growth = self.prev_adx is not None and adx_v > self.prev_adx
+        self.prev_adx = adx_v
 
-        # ✅ 1M підтвердження входу
+        # ---------- LIMIT REPEATS ----------
+        if self.last_direction == direction:
+            self.repeat_count += 1
+        else:
+            self.repeat_count = 1
+            self.last_direction = direction
+
+        conditions = []
+
+        if direction == "BUY":
+            rsi_ok = rsi_v >= 55
+            conditions.append(f"RSI = {round(rsi_v,1)} → {'OK ✅' if rsi_ok else '❌'}")
+        else:
+            rsi_ok = rsi_v <= 45
+            conditions.append(f"RSI = {round(rsi_v,1)} → {'OK ✅' if rsi_ok else '❌'}")
+
+        adx_ok = adx_v >= 25
+        conditions.append(f"ADX = {round(adx_v,1)} → {'OK ✅' if adx_ok else '❌'}")
+
+        ema_ok = abs(ema20 - ema50) >= 0.00008
+        conditions.append(f"EMA → {'OK ✅' if ema_ok else '❌'}")
+
+        conf_ok = conf10 == 3
+        conditions.append(f"10M = {conf10}/3")
+
+        impulse_ok = min_body_pips_ok(m10, self.symbol, self.min_body_pips)
+        conditions.append(f"Impulse → {'OK ✅' if impulse_ok else '❌'}")
+
         last1 = m1[-1]
-        if direction == "BUY" and last1.direction != "UP":
-            return {"ok": False, "reason": "M1_NOT_CONFIRMED"}
-        if direction == "SELL" and last1.direction != "DOWN":
-            return {"ok": False, "reason": "M1_NOT_CONFIRMED"}
+        m1_ok = (direction == "BUY" and last1.direction == "UP") or (direction == "SELL" and last1.direction == "DOWN")
+        conditions.append(f"1M → {'OK ✅' if m1_ok else '❌'}")
 
-        # якщо все ідеально — фіксуємо
+        fails = []
+        if not rsi_ok: fails.append("RSI")
+        if not adx_ok: fails.append("ADX")
+        if not ema_ok: fails.append("EMA")
+        if not conf_ok: fails.append("10M")
+        if not impulse_ok: fails.append("Impulse")
+        if not m1_ok: fails.append("1M")
+        if not adx_growth: fails.append("ADX не росте")
+        if self.repeat_count >= 4: fails.append("Повтор")
+
+        entry_advice = "✅ ВХОДИТИ" if not fails else "❌ НЕ ВХОДИТИ — " + ", ".join(fails)
+
         self._last_signal_candle_ts = last_closed_10m.start_ts
 
-        # умовна оцінка "ймовірності"
         score = 90
-        if adx_v >= 35:
-            score = 93
-        if conf10 == 3:
-            score += 2
+        if adx_growth: score += 2
+        if conf10 == 3: score += 2
         score = min(score, 97)
 
         return {
@@ -449,15 +469,10 @@ class SignalEngine:
             "adx": round(adx_v, 1),
             "ema20": round(ema20, 5),
             "ema50": round(ema50, 5),
-            "why": [
-                f"EMA тренд ({trend})",
-                f"ADX сильний ({round(adx_v,1)})",
-                f"RSI у зоні ({round(rsi_v,1)})",
-                f"10M свічки підтвердили: {conf10}/3",
-                f"Є імпульс (body ≥ {self.min_body_pips} pips)",
-                f"1M підтвердив вхід ({last1.direction})",
-            ],
+            "conditions": conditions,
+            "entry_advice": entry_advice,
         }
+
 
 
 ENGINE = SignalEngine()
@@ -513,41 +528,26 @@ SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 def fmt_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
-    if sig.get("ok") and sig.get("direction") in ("BUY", "SELL"):
+    if sig.get("ok"):
         arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
-        why = "\n".join([f"• {x}" for x in sig.get("why", [])])
+        conds = "\n".join(sig.get("conditions", []))
         mins = max(1, int(sig.get("expiry_sec", 120) / 60))
+
         return (
             f"{arrow} | <b>{ENGINE.symbol}</b>\n"
-            f"⏱ <b>Експірація:</b> {mins} хв\n"
-            f"🕒 <b>Kyiv:</b> {t}\n"
-            f"📊 <b>Ймовірність:</b> {sig.get('score', 0)}%\n\n"
-            f"<b>RSI(14):</b> {sig['rsi']}\n"
-            f"<b>ADX(14):</b> {sig['adx']}\n"
-            f"<b>EMA20:</b> {sig['ema20']}\n"
-            f"<b>EMA50:</b> {sig['ema50']}\n\n"
-            f"<b>Підтвердження:</b>\n{why}"
+            f"⏱ {mins} хв\n"
+            f"🕒 Kyiv: {t}\n"
+            f"📊 {sig.get('score',0)}%\n\n"
+            f"RSI: {sig['rsi']}\n"
+            f"ADX: {sig['adx']}\n"
+            f"EMA20: {sig['ema20']}\n"
+            f"EMA50: {sig['ema50']}\n\n"
+            f"{conds}\n\n"
+            f"<b>{sig['entry_advice']}</b>"
         )
 
-    reasons = {
-        "NOT_ENOUGH_DATA": "⏳ Недостатньо свічок (бот тільки запустився)",
-        "WAIT_NEXT_CANDLE": "⏳ Чекаю закриття нової 10-хв свічки",
-        "MARKET_FLAT": "🟡 Слабкий тренд (ADX низький)",
-        "NO_EMA": "❌ EMA не порахувались",
-        "NO_TREND": "🟡 Немає EMA тренду",
-        "CHOPPY": "🟡 Ринок пиляє (немає структури)",
-        "NO_SIGNAL": "😐 Немає входу по RSI зоні",
-        "WEAK_CANDLES_10M": "🟡 10M свічки не підтвердили напрям",
-        "NO_IMPULSE": "🟡 Нема імпульсу (тіло слабке)",
-        "M1_NOT_CONFIRMED": "⏳ 1M не підтвердив — чекаю",
-        "NO_DATA": "❌ Індикатори не порахувались",
-    }
+    return "❌ Нема сигналу"
 
-    return (
-        "❌ <b>Сигналу немає</b>\n"
-        f"🕒 <b>Kyiv:</b> {t}\n"
-        f"{reasons.get(sig.get('reason'), sig.get('reason'))}"
-    )
 
 
 # ---------------- COMMANDS ----------------
