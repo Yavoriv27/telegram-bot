@@ -373,104 +373,104 @@ class SignalEngine:
             }
 
         def compute_signal(self) -> Dict[str, Any]:
-        snap = self.snapshot()
-        last = snap["last"]
-        m1 = snap["m1"]
-        m10 = snap["m10"]
-
-        if not last or len(m10) < 25 or len(m1) < 30:
-            return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
-
-        last_closed_10m = m10[-1]
-
-        if self._last_signal_candle_ts == last_closed_10m.start_ts:
-            return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
-
-        closes10 = [c.close for c in m10]
-        highs10 = [c.high for c in m10]
-        lows10 = [c.low for c in m10]
-
-        rsi_v = rsi(closes10, 14)
-        adx_v = adx(highs10, lows10, closes10, 14)
-
-        if rsi_v is None or adx_v is None:
-            return {"ok": False, "reason": "NO_DATA"}
-
-        ema20 = ema(closes10[-150:], 20)
-        ema50 = ema(closes10[-220:], 50)
-        if ema20 is None or ema50 is None:
-            return {"ok": False, "reason": "NO_EMA"}
-
-        direction = "BUY" if ema20 > ema50 else "SELL"
-
-        conf10 = last3_confirm(m10, direction)
-
-        # ---------- ADX GROWTH ----------
-        adx_growth = self.prev_adx is not None and adx_v > self.prev_adx
-        self.prev_adx = adx_v
-
-        # ---------- LIMIT REPEATS ----------
-        if self.last_direction == direction:
-            self.repeat_count += 1
-        else:
-            self.repeat_count = 1
-            self.last_direction = direction
-
-        conditions = []
-
-        if direction == "BUY":
-            rsi_ok = rsi_v >= 55
-            conditions.append(f"RSI = {round(rsi_v,1)} → {'OK ✅' if rsi_ok else '❌'}")
-        else:
-            rsi_ok = rsi_v <= 45
-            conditions.append(f"RSI = {round(rsi_v,1)} → {'OK ✅' if rsi_ok else '❌'}")
-
-        adx_ok = adx_v >= 25
-        conditions.append(f"ADX = {round(adx_v,1)} → {'OK ✅' if adx_ok else '❌'}")
-
-        ema_ok = abs(ema20 - ema50) >= 0.00008
-        conditions.append(f"EMA → {'OK ✅' if ema_ok else '❌'}")
-
-        conf_ok = conf10 == 3
-        conditions.append(f"10M = {conf10}/3")
-
-        impulse_ok = min_body_pips_ok(m10, self.symbol, self.min_body_pips)
-        conditions.append(f"Impulse → {'OK ✅' if impulse_ok else '❌'}")
-
-        last1 = m1[-1]
-        m1_ok = (direction == "BUY" and last1.direction == "UP") or (direction == "SELL" and last1.direction == "DOWN")
-        conditions.append(f"1M → {'OK ✅' if m1_ok else '❌'}")
-
-        fails = []
-        if not rsi_ok: fails.append("RSI")
-        if not adx_ok: fails.append("ADX")
-        if not ema_ok: fails.append("EMA")
-        if not conf_ok: fails.append("10M")
-        if not impulse_ok: fails.append("Impulse")
-        if not m1_ok: fails.append("1M")
-        if not adx_growth: fails.append("ADX не росте")
-        if self.repeat_count >= 4: fails.append("Повтор")
-
-        entry_advice = "✅ ВХОДИТИ" if not fails else "❌ НЕ ВХОДИТИ — " + ", ".join(fails)
-
-        self._last_signal_candle_ts = last_closed_10m.start_ts
-
-        score = 90
-        if adx_growth: score += 2
-        if conf10 == 3: score += 2
-        score = min(score, 97)
-
-        return {
-            "ok": True,
-            "direction": direction,
-            "expiry_sec": self.expiry_sec,
-            "score": score,
-            "rsi": round(rsi_v, 1),
-            "adx": round(adx_v, 1),
-            "ema20": round(ema20, 5),
-            "ema50": round(ema50, 5),
-            "conditions": conditions,
-            "entry_advice": entry_advice,
+            snap = self.snapshot()
+            last = snap["last"]
+            m1 = snap["m1"]
+            m10 = snap["m10"]
+    
+            if not last or len(m10) < 25 or len(m1) < 30:
+                return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
+    
+            last_closed_10m = m10[-1]
+    
+            if self._last_signal_candle_ts == last_closed_10m.start_ts:
+                return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
+    
+            closes10 = [c.close for c in m10]
+            highs10 = [c.high for c in m10]
+            lows10 = [c.low for c in m10]
+    
+            rsi_v = rsi(closes10, 14)
+            adx_v = adx(highs10, lows10, closes10, 14)
+    
+            if rsi_v is None or adx_v is None:
+                return {"ok": False, "reason": "NO_DATA"}
+    
+            ema20 = ema(closes10[-150:], 20)
+            ema50 = ema(closes10[-220:], 50)
+            if ema20 is None or ema50 is None:
+                return {"ok": False, "reason": "NO_EMA"}
+    
+            direction = "BUY" if ema20 > ema50 else "SELL"
+    
+            conf10 = last3_confirm(m10, direction)
+    
+            # ---------- ADX GROWTH ----------
+            adx_growth = self.prev_adx is not None and adx_v > self.prev_adx
+            self.prev_adx = adx_v
+    
+            # ---------- LIMIT REPEATS ----------
+            if self.last_direction == direction:
+                self.repeat_count += 1
+            else:
+                self.repeat_count = 1
+                self.last_direction = direction
+    
+            conditions = []
+    
+            if direction == "BUY":
+                rsi_ok = rsi_v >= 55
+                conditions.append(f"RSI = {round(rsi_v,1)} → {'OK ✅' if rsi_ok else '❌'}")
+            else:
+                rsi_ok = rsi_v <= 45
+                conditions.append(f"RSI = {round(rsi_v,1)} → {'OK ✅' if rsi_ok else '❌'}")
+    
+            adx_ok = adx_v >= 25
+            conditions.append(f"ADX = {round(adx_v,1)} → {'OK ✅' if adx_ok else '❌'}")
+    
+            ema_ok = abs(ema20 - ema50) >= 0.00008
+            conditions.append(f"EMA → {'OK ✅' if ema_ok else '❌'}")
+    
+            conf_ok = conf10 == 3
+            conditions.append(f"10M = {conf10}/3")
+    
+            impulse_ok = min_body_pips_ok(m10, self.symbol, self.min_body_pips)
+            conditions.append(f"Impulse → {'OK ✅' if impulse_ok else '❌'}")
+    
+            last1 = m1[-1]
+            m1_ok = (direction == "BUY" and last1.direction == "UP") or (direction == "SELL" and last1.direction == "DOWN")
+            conditions.append(f"1M → {'OK ✅' if m1_ok else '❌'}")
+    
+            fails = []
+            if not rsi_ok: fails.append("RSI")
+            if not adx_ok: fails.append("ADX")
+            if not ema_ok: fails.append("EMA")
+            if not conf_ok: fails.append("10M")
+            if not impulse_ok: fails.append("Impulse")
+            if not m1_ok: fails.append("1M")
+            if not adx_growth: fails.append("ADX не росте")
+            if self.repeat_count >= 4: fails.append("Повтор")
+    
+            entry_advice = "✅ ВХОДИТИ" if not fails else "❌ НЕ ВХОДИТИ — " + ", ".join(fails)
+    
+            self._last_signal_candle_ts = last_closed_10m.start_ts
+    
+            score = 90
+            if adx_growth: score += 2
+            if conf10 == 3: score += 2
+            score = min(score, 97)
+    
+            return {
+                "ok": True,
+                "direction": direction,
+                "expiry_sec": self.expiry_sec,
+                "score": score,
+                "rsi": round(rsi_v, 1),
+                "adx": round(adx_v, 1),
+                "ema20": round(ema20, 5),
+                "ema50": round(ema50, 5),
+                "conditions": conditions,
+                "entry_advice": entry_advice,
         }
 
 
