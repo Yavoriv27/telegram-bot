@@ -372,7 +372,7 @@ class SignalEngine:
                 "m10": self.hist_10m.items(),
             }
 
-        def compute_signal(self) -> Dict[str, Any]:
+            def compute_signal(self) -> Dict[str, Any]:
             snap = self.snapshot()
             last = snap["last"]
             m1 = snap["m1"]
