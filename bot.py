@@ -449,6 +449,7 @@ class SignalEngine:
         }
 
 
+# ================= MULTI SYMBOL =================
 
     SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY", "EUR_JPY"]
 
