@@ -451,12 +451,12 @@ class SignalEngine:
 
 # ================= MULTI SYMBOL =================
 
-    SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY", "EUR_JPY"]
+SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY", "EUR_JPY"]
 
-    ENGINES = {}
+ENGINES = {}
 
-    for s in SYMBOLS:
-        ENGINES[s] = SignalEngine(s)
+for s in SYMBOLS:
+    ENGINES[s] = SignalEngine(s)
 
 
 
