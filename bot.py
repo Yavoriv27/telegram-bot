@@ -450,8 +450,13 @@ class SignalEngine:
 
 
 
+    SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY", "EUR_JPY"]
 
-ENGINE = SignalEngine()
+    ENGINES = {}
+    for s in SYMBOLS:
+        os.environ["SYMBOL"] = s
+        ENGINES[s] = SignalEngine()
+
 
 
 # ---------------- SUBSCRIBERS ----------------
@@ -506,7 +511,6 @@ def fmt_signal(sig: dict) -> str:
 
     if sig.get("ok"):
         arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
-        conds = "\n".join(sig.get("conditions", []))
         mins = max(1, int(sig.get("expiry_sec", 120) / 60))
 
         return (
@@ -517,14 +521,42 @@ def fmt_signal(sig: dict) -> str:
             f"RSI: {sig['rsi']}\n"
             f"ADX: {sig['adx']}\n"
             f"EMA20: {sig['ema20']}\n"
-            f"EMA50: {sig['ema50']}\n\n"
-            f"{conds}\n\n"
-            f"<b>{sig['entry_advice']}</b>"
+            f"EMA50: {sig['ema50']}"
         )
 
-    return "❌ Нема сигналу"
+    reasons = {
+        "NOT_ENOUGH_DATA": "⏳ Мало свічок (бот тільки стартував)",
+        "WAIT_NEXT_CANDLE": "⏱ Чекаю закриття нової 10М свічки",
+        "NO_DATA": "❌ Індикатори ще не готові",
+        "NO_EMA": "⚠ EMA не пораховані",
+        "LATE_MOVE": "🚫 Запізнілий рух або ADX не росте",
+        "RSI_WEAK": "📉 RSI слабкий для входу",
+        "WEAK_10M": "🕯 Недостатнє підтвердження 10М",
+        "NO_IMPULSE": "⚡ Нема імпульсу по тілу свічки",
+        "M1_NOT_CONFIRMED": "1M не підтвердила напрям"
+    }
 
+    reason_text = reasons.get(sig.get("reason"), sig.get("reason", "Невідомо"))
 
+    return (
+        f"❌ <b>Сигналу немає</b>\n"
+        f"🕒 Kyiv: {t}\n"
+        f"Причина: {reason_text}"
+    )
+def compute_best_signal():
+    best = None
+
+    for sym, eng in ENGINES.items():
+        sig = eng.compute_signal()
+        if not sig.get("ok"):
+            continue
+
+        sig["symbol"] = sym
+
+        if best is None or sig.get("adx", 0) > best.get("adx", 0):
+            best = sig
+
+    return best if best else {"ok": False, "reason": "NO_ACTIVE_PAIR"}
 
 # ---------------- COMMANDS ----------------
 
@@ -568,7 +600,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sig = ENGINE.compute_signal()
+    sig = sig = compute_best_signal()
+
     await update.message.reply_text(fmt_signal(sig), parse_mode=ParseMode.HTML)
 
 
@@ -605,10 +638,10 @@ async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- AUTO JOB ----------------
 
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
-    if not ENGINE.auto_enabled:
+    if not any(e.auto_enabled for e in ENGINES.values()):
         return
 
-    sig = ENGINE.compute_signal()
+    sig = compute_best_signal()
     if not sig.get("ok"):
         return
 
@@ -624,7 +657,9 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN missing")
 
-    ENGINE.start_stream()
+    # стартуємо стріми для всіх пар
+    for e in ENGINES.values():
+        e.start_stream()
 
     app = Application.builder().token(token).build()
 
@@ -637,9 +672,11 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
     app.add_handler(CommandHandler("subs", cmd_subs))
 
-    app.job_queue.run_repeating(auto_job, interval=ENGINE.auto_every_sec, first=10)
+    # авто job (раз у хвилину або як у .env)
+    app.job_queue.run_repeating(auto_job, interval=list(ENGINES.values())[0].auto_every_sec, first=10)
 
     app.run_polling(drop_pending_updates=True)
+
 
 
 if __name__ == "__main__":
