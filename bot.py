@@ -282,8 +282,8 @@ def chop_filter_ok(closes: List[float]) -> bool:
 # ---------------- ENGINE ----------------
 
 class SignalEngine:
-    def __init__(self):
-        self.symbol = os.getenv("SYMBOL", "EUR_USD")
+    def __init__(self, symbol):
+        self.symbol = symbol
 
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "60"))
@@ -453,9 +453,10 @@ class SignalEngine:
     SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY", "EUR_JPY"]
 
     ENGINES = {}
+
     for s in SYMBOLS:
-        os.environ["SYMBOL"] = s
-        ENGINES[s] = SignalEngine()
+        ENGINES[s] = SignalEngine(s)
+
 
 
 
