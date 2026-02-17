@@ -458,7 +458,8 @@ ENGINES = {}
 for s in SYMBOLS:
     ENGINES[s] = SignalEngine(s)
 
-
+    
+ENGINE = ENGINES["EUR_USD"]
 
 
 # ---------------- SUBSCRIBERS ----------------
@@ -511,21 +512,6 @@ SUBS = Subscribers(os.getenv("SUBSCRIBERS_FILE", "/app/subscribers.json"))
 def fmt_signal(sig: dict) -> str:
     t = fmt_kyiv(now_utc())
 
-    if sig.get("ok"):
-        arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
-        mins = max(1, int(sig.get("expiry_sec", 120) / 60))
-
-        return (
-            f"{arrow} | <b>{ENGINE.symbol}</b>\n"
-            f"⏱ {mins} хв\n"
-            f"🕒 Kyiv: {t}\n"
-            f"📊 {sig.get('score',0)}%\n\n"
-            f"RSI: {sig['rsi']}\n"
-            f"ADX: {sig['adx']}\n"
-            f"EMA20: {sig['ema20']}\n"
-            f"EMA50: {sig['ema50']}"
-        )
-
     reasons = {
         "NOT_ENOUGH_DATA": "⏳ Мало свічок (бот тільки стартував)",
         "WAIT_NEXT_CANDLE": "⏱ Чекаю закриття нової 10М свічки",
@@ -535,16 +521,34 @@ def fmt_signal(sig: dict) -> str:
         "RSI_WEAK": "📉 RSI слабкий для входу",
         "WEAK_10M": "🕯 Недостатнє підтвердження 10М",
         "NO_IMPULSE": "⚡ Нема імпульсу по тілу свічки",
-        "M1_NOT_CONFIRMED": "1M не підтвердила напрям"
+        "M1_NOT_CONFIRMED": "1M не підтвердила напрям",
+        "NO_ACTIVE_PAIR": "🔎 Жодна пара зараз не дає сильного сигналу"
     }
 
-    reason_text = reasons.get(sig.get("reason"), sig.get("reason", "Невідомо"))
+    if sig.get("ok"):
+        arrow = "🟢 BUY" if sig["direction"] == "BUY" else "🔴 SELL"
+        mins = max(1, int(sig.get("expiry_sec", 120) / 60))
+
+        return (
+            f"{arrow} | <b>{sig['symbol']}</b>\n"
+            f"⏱ {mins} хв\n"
+            f"🕒 Kyiv: {t}\n"
+            f"📊 {sig.get('score',0)}%\n\n"
+            f"RSI: {sig['rsi']}\n"
+            f"ADX: {sig['adx']}\n"
+            f"EMA20: {sig['ema20']}\n"
+            f"EMA50: {sig['ema50']}"
+        )
+
+    reason_code = sig.get("reason", "UNKNOWN")
+    reason_text = reasons.get(reason_code, f"Невідома причина: {reason_code}")
 
     return (
         f"❌ <b>Сигналу немає</b>\n"
         f"🕒 Kyiv: {t}\n"
         f"Причина: {reason_text}"
     )
+
 def compute_best_signal():
     best = None
 
