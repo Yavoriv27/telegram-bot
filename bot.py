@@ -288,40 +288,28 @@ class SignalEngine:
         self.auto_enabled = os.getenv("AUTO_ENABLED", "true").lower() == "true"
         self.auto_every_sec = int(os.getenv("AUTO_EVERY_SEC", "60"))
 
-        self.expiry_sec = int(os.getenv("EXPIRY_SEC", "120"))
-
-        self.min_adx = float(os.getenv("MIN_ADX", "28"))
-        self.min_body_pips = float(os.getenv("MIN_BODY_PIPS", "2.0"))
-
-        self.rsi_buy_low = float(os.getenv("RSI_BUY_LOW", "52"))
-        self.rsi_buy_high = float(os.getenv("RSI_BUY_HIGH", "64"))
-        self.rsi_sell_low = float(os.getenv("RSI_SELL_LOW", "36"))
-        self.rsi_sell_high = float(os.getenv("RSI_SELL_HIGH", "48"))
+        self.expiry_sec = 300  # 5 хв
 
         self.tf_1m = 60
-        self.tf_10m = 600
+        self.tf_5m = 300
 
         self._q = queue.Queue(maxsize=20000)
         self._lock = threading.Lock()
 
         self.builder_1m = InternalCandleBuilder(self.tf_1m)
-        self.builder_10m = InternalCandleBuilder(self.tf_10m)
+        self.builder_5m = InternalCandleBuilder(self.tf_5m)
 
         self.hist_1m = CandleHistory(maxlen=800)
-        self.hist_10m = CandleHistory(maxlen=800)
+        self.hist_5m = CandleHistory(maxlen=800)
 
         self._last_1m_ts = None
-        self._last_10m_ts = None
+        self._last_5m_ts = None
 
         self.last_tick = None
         self._stream = None
 
         self._last_signal_candle_ts: Optional[float] = None
 
-        self.prev_adx = None
-        self.last_direction = None
-        self.repeat_count = 0
-        
     def start_stream(self):
         api_key = (os.getenv("OANDA_API_KEY") or "").strip()
         account_id = (os.getenv("OANDA_ACCOUNT_ID") or "").strip()
@@ -352,100 +340,104 @@ class SignalEngine:
                 self.last_tick = item
 
                 self.builder_1m.on_tick(ts, mid)
-                self.builder_10m.on_tick(ts, mid)
+                self.builder_5m.on_tick(ts, mid)
 
                 c1 = self.builder_1m.last_closed
                 if c1 and c1.start_ts != self._last_1m_ts:
                     self._last_1m_ts = c1.start_ts
                     self.hist_1m.append(c1)
 
-                c10 = self.builder_10m.last_closed
-                if c10 and c10.start_ts != self._last_10m_ts:
-                    self._last_10m_ts = c10.start_ts
-                    self.hist_10m.append(c10)
+                c5 = self.builder_5m.last_closed
+                if c5 and c5.start_ts != self._last_5m_ts:
+                    self._last_5m_ts = c5.start_ts
+                    self.hist_5m.append(c5)
 
     def snapshot(self):
         with self._lock:
             return {
                 "last": self.last_tick,
                 "m1": self.hist_1m.items(),
-                "m10": self.hist_10m.items(),
+                "m5": self.hist_5m.items(),
             }
 
     def compute_signal(self) -> Dict[str, Any]:
         snap = self.snapshot()
         last = snap["last"]
         m1 = snap["m1"]
-        m10 = snap["m10"]
+        m5 = snap["m5"]
 
-        if not last or len(m10) < 25 or len(m1) < 30:
+        if not last or len(m5) < 50:
             return {"ok": False, "reason": "NOT_ENOUGH_DATA"}
 
-        last_closed_10m = m10[-1]
+        last_closed_5m = m5[-1]
 
-        if self._last_signal_candle_ts == last_closed_10m.start_ts:
+        if self._last_signal_candle_ts == last_closed_5m.start_ts:
             return {"ok": False, "reason": "WAIT_NEXT_CANDLE"}
 
-        closes10 = [c.close for c in m10]
-        highs10 = [c.high for c in m10]
-        lows10 = [c.low for c in m10]
+        closes = [c.close for c in m5]
+        highs = [c.high for c in m5]
+        lows = [c.low for c in m5]
 
-        rsi_v = rsi(closes10, 14)
-        adx_v = adx(highs10, lows10, closes10, 14)
+        rsi_v = rsi(closes, 14)
+        adx_v = adx(highs, lows, closes, 14)
 
         if rsi_v is None or adx_v is None:
             return {"ok": False, "reason": "NO_DATA"}
 
-        ema20 = ema(closes10[-150:], 20)
-        ema50 = ema(closes10[-220:], 50)
+        ema20 = ema(closes[-150:], 20)
+        ema50 = ema(closes[-200:], 50)
+
         if ema20 is None or ema50 is None:
             return {"ok": False, "reason": "NO_EMA"}
 
         direction = "BUY" if ema20 > ema50 else "SELL"
 
-        conf10 = last3_confirm(m10, direction)
+        # RSI фільтр (середина)
+        if direction == "BUY" and not (45 <= rsi_v <= 65):
+            return {"ok": False, "reason": "RSI_RANGE"}
+        if direction == "SELL" and not (35 <= rsi_v <= 55):
+            return {"ok": False, "reason": "RSI_RANGE"}
 
-        adx_growth = self.prev_adx is not None and adx_v > self.prev_adx
-        self.prev_adx = adx_v
+        # ADX середній
+        if not (18 <= adx_v <= 30):
+            return {"ok": False, "reason": "ADX_BAD"}
 
-        if self.last_direction == direction:
-            self.repeat_count += 1
-        else:
-            self.repeat_count = 1
-            self.last_direction = direction
+        # Заборона після великої свічки
+        bodies = [c.body for c in m5[-10:]]
+        avg_body = mean(bodies[:-1])
+        if avg_body == 0:
+            return {"ok": False, "reason": "NO_BODY"}
 
-        if self.repeat_count >= 4 or not adx_growth:
-            return {"ok": False, "reason": "LATE_MOVE"}
+        if bodies[-1] > avg_body * 1.5:
+            return {"ok": False, "reason": "BIG_CANDLE"}
 
-        if direction == "BUY" and rsi_v < 55:
-            return {"ok": False, "reason": "RSI_WEAK"}
+        # Заборона 3 однакових підряд
+        last3 = m5[-3:]
+        if all(c.direction == "UP" for c in last3) or all(c.direction == "DOWN" for c in last3):
+            return {"ok": False, "reason": "OVEREXTENDED"}
 
-        if direction == "SELL" and rsi_v > 45:
-            return {"ok": False, "reason": "RSI_WEAK"}
-
-        if conf10 < 2:
-            return {"ok": False, "reason": "WEAK_10M"}
-
-        if not min_body_pips_ok(m10, self.symbol, self.min_body_pips):
-            return {"ok": False, "reason": "NO_IMPULSE"}
+        # 1M підтвердження
+        if len(m1) < 3:
+            return {"ok": False, "reason": "NO_M1"}
 
         last1 = m1[-1]
         if direction == "BUY" and last1.direction != "UP":
-            return {"ok": False, "reason": "M1_NOT_CONFIRMED"}
+            return {"ok": False, "reason": "M1_FAIL"}
         if direction == "SELL" and last1.direction != "DOWN":
-            return {"ok": False, "reason": "M1_NOT_CONFIRMED"}
+            return {"ok": False, "reason": "M1_FAIL"}
 
-        self._last_signal_candle_ts = last_closed_10m.start_ts
+        self._last_signal_candle_ts = last_closed_5m.start_ts
 
         return {
             "ok": True,
             "direction": direction,
             "expiry_sec": self.expiry_sec,
-            "score": 92,
+            "score": 78,
             "rsi": round(rsi_v, 1),
             "adx": round(adx_v, 1),
             "ema20": round(ema20, 5),
             "ema50": round(ema50, 5),
+            "symbol": self.symbol
         }
 
 
