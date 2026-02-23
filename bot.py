@@ -577,20 +577,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     snap = ENGINE.snapshot()
+
+    if not snap:
+        await update.message.reply_text("⚠ Дані ще не готові.")
+        return
+
     t = fmt_kyiv(now_utc())
-    m1 = snap["m1"]
-    m10 = snap["m10"]
+    m1 = snap.get("m1", [])
+    m5 = snap.get("m5", [])
     last = snap.get("last")
 
     msg = (
-        "<b>СТАТУС БОТА (HARD)</b>\n"
+        "<b>СТАТУС БОТА</b>\n"
         f"🕒 <b>Kyiv:</b> {t}\n"
         f"⚙️ <b>Авто:</b> {'ON' if ENGINE.auto_enabled else 'OFF'}\n"
-        f"🎯 <b>MIN_ADX:</b> {ENGINE.min_adx}\n"
-        f"⚡ <b>MIN_BODY:</b> {ENGINE.min_body_pips} pips\n"
-        f"🕯️ <b>Свічки:</b> 1M={len(m1)} | 10M={len(m10)}\n"
+        f"🕯️ <b>Свічки:</b> 1M={len(m1)} | 5M={len(m5)}\n"
         f"⏱️ <b>EXPIRY:</b> {ENGINE.expiry_sec} сек"
     )
+
     if last:
         msg += f"\nTick: bid={last['bid']:.5f} ask={last['ask']:.5f}"
 
