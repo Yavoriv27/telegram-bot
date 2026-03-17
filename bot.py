@@ -10,7 +10,6 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 load_dotenv()
-
 KYIV = pytz.timezone("Europe/Kyiv")
 
 def now():
@@ -47,18 +46,22 @@ RSI_SELL=45
 ATR_FILTER=0.0005
 MIN_PROB=0.78
 
-FILE="bot_state.json"
+BALANCE=3000
+START_BALANCE=3000
+RISK=0.1
+PAYOUT=0.8
 
-def load():
-    if not os.path.exists(FILE):
-        return {"wins":0,"losses":0,"streak":0,
-                "weights":{"trend":1,"rsi":1,"momentum":1,"m1":1,"chop":1},
-                "bias":0}
-    return json.load(open(FILE))
+STATE={"wins":0,"losses":0,"streak":0,"bias":0}
 
-def save(d): json.dump(d,open(FILE,"w"))
+def get_bet():
+    return round(min(BALANCE*RISK, BALANCE*0.15),2)
 
-STATE=load()
+def risk_block():
+    profit=(BALANCE-START_BALANCE)/START_BALANCE
+    if profit<=-0.2: return "⛔ STOP DAY"
+    if profit>=0.3: return "💰 STOP DAY"
+    if STATE["streak"]<=-3: return "⛔ STOP (серія)"
+    return None
 
 @dataclass
 class Candle:
@@ -116,11 +119,7 @@ class Engine:
 
         self.m1=[];self.m5=[];self.m15=[];self.m60=[]
 
-        self.last_signal_candle=None
-        self.last_signal_dir=None
-        self.last_signal_prob=0
         self.last_signal_time=0
-        self.cooldown=180
 
     def start(self):
         threading.Thread(target=self.stream,daemon=True).start()
@@ -147,10 +146,8 @@ class Engine:
         while True:
             ts,p=self.q.get()
 
-            self.b1.tick(ts,p)
-            self.b5.tick(ts,p)
-            self.b15.tick(ts,p)
-            self.b60.tick(ts,p)
+            for b in [self.b1,self.b5,self.b15,self.b60]:
+                b.tick(ts,p)
 
             if self.b1.last:self.m1.append(self.b1.last)
             if self.b5.last:self.m5.append(self.b5.last)
@@ -162,91 +159,59 @@ class Engine:
             self.m15=self.m15[-200:]
             self.m60=self.m60[-200:]
 
-    def get_h1_trend(self):
-        if len(self.m60)<50:return None
-        closes=[c.c for c in self.m60]
-        e20=ema(closes,20)
-        e50=ema(closes,50)
-        if not e20 or not e50:return None
-        return "BUY" if e20>e50 else "SELL"
-
-    def get_last_candle(self):
-        if not self.m5:return None
-        return self.m5[-1].t
-
     def signal(self):
         if len(self.m15)<60:return None
-
-        if not is_trading_time(): return None
-        if is_news_time(): return None
-
-        if STATE["streak"]<0: return None
-        if STATE["streak"]<=-3: return None
+        if not is_trading_time() or is_news_time(): return None
+        if risk_block(): return None
 
         now_ts=time.time()
-        if now_ts-self.last_signal_time<self.cooldown: return None
-
-        candle=self.get_last_candle()
-        if not candle:return None
+        if now_ts-self.last_signal_time<180: return None
 
         closes=[c.c for c in self.m15]
-        highs=[c.h for c in self.m15]
-        lows=[c.l for c in self.m15]
-
         e20=ema(closes,20)
         e50=ema(closes,50)
         if not e20 or not e50:return None
 
         direction="BUY" if e20>e50 else "SELL"
 
-        # 🔥 H1 ФІЛЬТР
-        h1=self.get_h1_trend()
-        if not h1 or h1!=direction:
+        # H1
+        closes60=[c.c for c in self.m60]
+        e20h=ema(closes60,20)
+        e50h=ema(closes60,50)
+        if not e20h or not e50h:return None
+        if ("BUY" if e20h>e50h else "SELL")!=direction:
             return None
 
         r=rsi(closes)
-        a=atr(highs,lows,closes)
-        if not r or not a:return None
-        if a<ATR_FILTER:return None
+        if not r:return None
 
         last3=self.m5[-3:]
         if all(c.dir=="UP" for c in last3): return None
         if all(c.dir=="DOWN" for c in last3): return None
 
-        score=STATE["weights"]["trend"]
+        score=1
+        if direction=="BUY" and r>RSI_BUY: score+=1
+        if direction=="SELL" and r<RSI_SELL: score+=1
 
-        if direction=="BUY" and r>RSI_BUY: score+=STATE["weights"]["rsi"]
-        if direction=="SELL" and r<RSI_SELL: score+=STATE["weights"]["rsi"]
-
-        ups=sum(1 for c in last3 if c.dir=="UP")
-        downs=sum(1 for c in last3 if c.dir=="DOWN")
-
-        if direction=="BUY" and ups>=2: score+=STATE["weights"]["momentum"]
-        if direction=="SELL" and downs>=2: score+=STATE["weights"]["momentum"]
-
-        if direction=="BUY" and self.m1[-1].dir=="UP": score+=STATE["weights"]["m1"]
-        if direction=="SELL" and self.m1[-1].dir=="DOWN": score+=STATE["weights"]["m1"]
-
-        ch=stdev(closes[-20:])
-        if ch>pip(self.s)*2: score+=STATE["weights"]["chop"]
-
-        prob=sigmoid(score+STATE["bias"])
+        prob=sigmoid(score)
 
         if prob<MIN_PROB:return None
 
-        if self.last_signal_candle==candle: return None
-        if direction==self.last_signal_dir and prob<=self.last_signal_prob: return None
-
-        self.last_signal_candle=candle
-        self.last_signal_dir=direction
-        self.last_signal_prob=prob
         self.last_signal_time=now_ts
 
-        return {"dir":direction,"prob":round(prob*100,1),"symbol":self.s,"time":now_str()}
+        # 🔥 ПІДКАЗКА ВХОДУ
+        entry = "🔔 Входити зараз" if prob>0.8 else "⏳ Дочекатись свічки"
+
+        return {
+            "dir":direction,
+            "prob":round(prob*100,1),
+            "symbol":self.s,
+            "time":now_str(),
+            "entry":entry
+        }
 
 SYMBOLS=["EUR_USD","GBP_USD","USD_JPY"]
 ENGINES=[Engine(s) for s in SYMBOLS]
-
 for e in ENGINES:e.start()
 
 LAST=None
@@ -263,12 +228,16 @@ def best():
     return best
 
 def train(win):
-    if not LAST:return
+    global BALANCE
+    bet=get_bet()
     if win:
-        STATE["wins"]+=1; STATE["streak"]+=1; STATE["bias"]+=0.1
+        BALANCE+=bet*PAYOUT
+        STATE["wins"]+=1
+        STATE["streak"]+=1
     else:
-        STATE["losses"]+=1; STATE["streak"]-=1; STATE["bias"]-=0.1
-    save(STATE)
+        BALANCE-=bet
+        STATE["losses"]+=1
+        STATE["streak"]-=1
 
 def kb():
     return InlineKeyboardMarkup([
@@ -277,32 +246,35 @@ def kb():
     ])
 
 def fmt(s):
-    if STATE["streak"]<=-3:
-        return "⛔ STOP (серія мінусів)"
-    if not s:
-        return f"❌ Нема сигналу\n🕒 {now_str()}"
-    return f"{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'} {s['symbol']}\n📊 {s['prob']}%\n⏱ 2 хв\n🕒 {s['time']}"
+    block=risk_block()
+    if block:return block
+    if not s:return f"❌ Нема сигналу\n🕒 {now_str()}"
+
+    return (
+        f"{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'} {s['symbol']}\n"
+        f"📊 {s['prob']}%\n"
+        f"{s['entry']}\n"
+        f"💵 {get_bet()}\n"
+        f"💰 {round(BALANCE,2)}\n"
+        f"📉 {STATE['streak']}\n"
+        f"⏱ 2 хв\n"
+        f"🕒 {s['time']}"
+    )
 
 async def signal(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    s=best()
-    await update.message.reply_text(fmt(s),reply_markup=kb())
+    await update.message.reply_text(fmt(best()),reply_markup=kb())
 
 async def callback(update:Update,context:ContextTypes.DEFAULT_TYPE):
     q=update.callback_query
     await q.answer()
     train(q.data=="win")
-
-    total=STATE["wins"]+STATE["losses"]
-    wr=round(STATE["wins"]/total*100,1) if total else 0
-
-    await q.edit_message_text(f"WR: {wr}% | streak: {STATE['streak']}")
+    await q.edit_message_text("Результат збережено")
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 BOT READY (FINAL LEVEL)")
+    await update.message.reply_text("🔥 BOT ULTIMATE READY")
 
 async def auto(context):
-    if not is_trading_time() or is_news_time():
-        return
+    if not is_trading_time() or is_news_time(): return
     s=best()
     if s:
         await context.bot.send_message(context.job.chat_id,fmt(s),reply_markup=kb())
@@ -316,7 +288,7 @@ def main():
 
     async def start_auto(update:Update,context:ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_repeating(auto,interval=120,first=10,chat_id=update.effective_chat.id)
-        await update.message.reply_text("✅ Авто увімкнено")
+        await update.message.reply_text("✅ Авто ON")
 
     app.add_handler(CommandHandler("auto",start_auto))
 
