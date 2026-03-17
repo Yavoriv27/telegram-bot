@@ -1,6 +1,6 @@
 import os, json, time, math, queue, threading
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -13,77 +13,53 @@ load_dotenv()
 
 KYIV = pytz.timezone("Europe/Kyiv")
 
-# ===== НОВИНИ (редагуй при потребі) =====
-NEWS_TIMES = [
-    "15:30",  # USD news
-    "17:00",
-]
-
-NEWS_PAUSE_MIN = 15  # хв до/після
-
-# ===== UTILS =====
 def now():
     return datetime.now(timezone.utc).astimezone(KYIV)
 
 def now_str():
     return now().strftime("%H:%M:%S")
 
+def is_trading_time():
+    n=now()
+    h=n.hour; m=n.minute
+    if 9<=h<12: return True
+    if (h==15 and m>=30) or (16<=h<18): return True
+    return False
+
+NEWS_TIMES=["15:30","17:00"]
+
+def is_news_time():
+    n=now()
+    for t in NEWS_TIMES:
+        hh,mm=map(int,t.split(":"))
+        news=n.replace(hour=hh,minute=mm,second=0,microsecond=0)
+        if abs((n-news).total_seconds())/60<=15:
+            return True
+    return False
+
 def mean(x): return sum(x)/len(x) if x else 0
 def stdev(x): return math.sqrt(mean([(i-mean(x))**2 for i in x])) if x else 0
 def pip(s): return 0.01 if "JPY" in s else 0.0001
 def sigmoid(x): return 1/(1+math.exp(-x))
 
-# ===== TIME FILTER =====
-def is_trading_time():
-    n = now()
-    h = n.hour
-    m = n.minute
+RSI_BUY=55
+RSI_SELL=45
+ATR_FILTER=0.0005
+MIN_PROB=0.78
 
-    if 9 <= h < 12:
-        return True
-
-    if (h == 15 and m >= 30) or (16 <= h < 18):
-        return True
-
-    return False
-
-# ===== NEWS FILTER =====
-def is_news_time():
-    n = now()
-    for t in NEWS_TIMES:
-        hh, mm = map(int, t.split(":"))
-        news_dt = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
-
-        delta = abs((n - news_dt).total_seconds()) / 60
-
-        if delta <= NEWS_PAUSE_MIN:
-            return True
-
-    return False
-
-# ===== SETTINGS =====
-RSI_BUY = 55
-RSI_SELL = 45
-ATR_FILTER = 0.0005
-MIN_PROB = 0.7
-
-# ===== STORAGE =====
-FILE = "bot_state.json"
+FILE="bot_state.json"
 
 def load():
     if not os.path.exists(FILE):
-        return {
-            "wins":0,"losses":0,"streak":0,
-            "weights":{"trend":1,"rsi":1,"momentum":1,"m1":1,"chop":1},
-            "bias":0
-        }
+        return {"wins":0,"losses":0,"streak":0,
+                "weights":{"trend":1,"rsi":1,"momentum":1,"m1":1,"chop":1},
+                "bias":0}
     return json.load(open(FILE))
 
 def save(d): json.dump(d,open(FILE,"w"))
 
-STATE = load()
+STATE=load()
 
-# ===== CANDLE =====
 @dataclass
 class Candle:
     t:float;o:float;h:float;l:float;c:float
@@ -106,7 +82,6 @@ class Builder:
             self.last=self.cur
             self.cur=Candle(b,p,p,p,p)
 
-# ===== INDICATORS =====
 def ema(a,p):
     if len(a)<p:return None
     k=2/(p+1);e=a[0]
@@ -129,7 +104,6 @@ def atr(h,l,c,p=14):
         trs.append(max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])))
     return mean(trs[-p:]) if len(trs)>=p else None
 
-# ===== ENGINE =====
 class Engine:
     def __init__(self,s):
         self.s=s
@@ -138,8 +112,9 @@ class Engine:
         self.b1=Builder(60)
         self.b5=Builder(300)
         self.b15=Builder(900)
+        self.b60=Builder(3600)
 
-        self.m1=[];self.m5=[];self.m15=[]
+        self.m1=[];self.m5=[];self.m15=[];self.m60=[]
 
         self.last_signal_candle=None
         self.last_signal_dir=None
@@ -175,14 +150,25 @@ class Engine:
             self.b1.tick(ts,p)
             self.b5.tick(ts,p)
             self.b15.tick(ts,p)
+            self.b60.tick(ts,p)
 
             if self.b1.last:self.m1.append(self.b1.last)
             if self.b5.last:self.m5.append(self.b5.last)
             if self.b15.last:self.m15.append(self.b15.last)
+            if self.b60.last:self.m60.append(self.b60.last)
 
             self.m1=self.m1[-200:]
             self.m5=self.m5[-200:]
             self.m15=self.m15[-200:]
+            self.m60=self.m60[-200:]
+
+    def get_h1_trend(self):
+        if len(self.m60)<50:return None
+        closes=[c.c for c in self.m60]
+        e20=ema(closes,20)
+        e50=ema(closes,50)
+        if not e20 or not e50:return None
+        return "BUY" if e20>e50 else "SELL"
 
     def get_last_candle(self):
         if not self.m5:return None
@@ -191,21 +177,14 @@ class Engine:
     def signal(self):
         if len(self.m15)<60:return None
 
-        # TIME FILTER
-        if not is_trading_time():
-            return None
+        if not is_trading_time(): return None
+        if is_news_time(): return None
 
-        # NEWS FILTER
-        if is_news_time():
-            return None
-
-        # STOP
-        if STATE["streak"]<=-3:
-            return None
+        if STATE["streak"]<0: return None
+        if STATE["streak"]<=-3: return None
 
         now_ts=time.time()
-        if now_ts-self.last_signal_time<self.cooldown:
-            return None
+        if now_ts-self.last_signal_time<self.cooldown: return None
 
         candle=self.get_last_candle()
         if not candle:return None
@@ -220,17 +199,25 @@ class Engine:
 
         direction="BUY" if e20>e50 else "SELL"
 
+        # 🔥 H1 ФІЛЬТР
+        h1=self.get_h1_trend()
+        if not h1 or h1!=direction:
+            return None
+
         r=rsi(closes)
         a=atr(highs,lows,closes)
         if not r or not a:return None
         if a<ATR_FILTER:return None
+
+        last3=self.m5[-3:]
+        if all(c.dir=="UP" for c in last3): return None
+        if all(c.dir=="DOWN" for c in last3): return None
 
         score=STATE["weights"]["trend"]
 
         if direction=="BUY" and r>RSI_BUY: score+=STATE["weights"]["rsi"]
         if direction=="SELL" and r<RSI_SELL: score+=STATE["weights"]["rsi"]
 
-        last3=self.m5[-3:]
         ups=sum(1 for c in last3 if c.dir=="UP")
         downs=sum(1 for c in last3 if c.dir=="DOWN")
 
@@ -247,25 +234,16 @@ class Engine:
 
         if prob<MIN_PROB:return None
 
-        if self.last_signal_candle==candle:
-            return None
-
-        if direction==self.last_signal_dir and prob<=self.last_signal_prob:
-            return None
+        if self.last_signal_candle==candle: return None
+        if direction==self.last_signal_dir and prob<=self.last_signal_prob: return None
 
         self.last_signal_candle=candle
         self.last_signal_dir=direction
         self.last_signal_prob=prob
         self.last_signal_time=now_ts
 
-        return {
-            "dir":direction,
-            "prob":round(prob*100,1),
-            "symbol":self.s,
-            "time":now_str()
-        }
+        return {"dir":direction,"prob":round(prob*100,1),"symbol":self.s,"time":now_str()}
 
-# ===== MULTI =====
 SYMBOLS=["EUR_USD","GBP_USD","USD_JPY"]
 ENGINES=[Engine(s) for s in SYMBOLS]
 
@@ -284,20 +262,14 @@ def best():
     LAST=best
     return best
 
-# ===== TRAIN =====
 def train(win):
     if not LAST:return
     if win:
-        STATE["wins"]+=1
-        STATE["streak"]+=1
-        STATE["bias"]+=0.1
+        STATE["wins"]+=1; STATE["streak"]+=1; STATE["bias"]+=0.1
     else:
-        STATE["losses"]+=1
-        STATE["streak"]-=1
-        STATE["bias"]-=0.1
+        STATE["losses"]+=1; STATE["streak"]-=1; STATE["bias"]-=0.1
     save(STATE)
 
-# ===== TELEGRAM =====
 def kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅",callback_data="win"),
@@ -307,16 +279,9 @@ def kb():
 def fmt(s):
     if STATE["streak"]<=-3:
         return "⛔ STOP (серія мінусів)"
-
     if not s:
         return f"❌ Нема сигналу\n🕒 {now_str()}"
-
-    return (
-        f"{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'} {s['symbol']}\n"
-        f"📊 {s['prob']}%\n"
-        f"⏱ 2 хв\n"
-        f"🕒 {s['time']}"
-    )
+    return f"{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'} {s['symbol']}\n📊 {s['prob']}%\n⏱ 2 хв\n🕒 {s['time']}"
 
 async def signal(update:Update,context:ContextTypes.DEFAULT_TYPE):
     s=best()
@@ -333,12 +298,11 @@ async def callback(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"WR: {wr}% | streak: {STATE['streak']}")
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 BOT READY (NEWS FILTER ON)")
+    await update.message.reply_text("🔥 BOT READY (FINAL LEVEL)")
 
 async def auto(context):
     if not is_trading_time() or is_news_time():
         return
-
     s=best()
     if s:
         await context.bot.send_message(context.job.chat_id,fmt(s),reply_markup=kb())
@@ -352,7 +316,7 @@ def main():
 
     async def start_auto(update:Update,context:ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_repeating(auto,interval=120,first=10,chat_id=update.effective_chat.id)
-        await update.message.reply_text("✅ Автосигнали увімкнено")
+        await update.message.reply_text("✅ Авто увімкнено")
 
     app.add_handler(CommandHandler("auto",start_auto))
 
