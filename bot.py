@@ -1,6 +1,6 @@
 import os, json, time, math, queue, threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 from dotenv import load_dotenv
@@ -13,13 +13,53 @@ load_dotenv()
 
 KYIV = pytz.timezone("Europe/Kyiv")
 
+# ===== НОВИНИ (редагуй при потребі) =====
+NEWS_TIMES = [
+    "15:30",  # USD news
+    "17:00",
+]
+
+NEWS_PAUSE_MIN = 15  # хв до/після
+
+# ===== UTILS =====
 def now():
-    return datetime.now(timezone.utc).astimezone(KYIV).strftime("%H:%M:%S")
+    return datetime.now(timezone.utc).astimezone(KYIV)
+
+def now_str():
+    return now().strftime("%H:%M:%S")
 
 def mean(x): return sum(x)/len(x) if x else 0
 def stdev(x): return math.sqrt(mean([(i-mean(x))**2 for i in x])) if x else 0
 def pip(s): return 0.01 if "JPY" in s else 0.0001
 def sigmoid(x): return 1/(1+math.exp(-x))
+
+# ===== TIME FILTER =====
+def is_trading_time():
+    n = now()
+    h = n.hour
+    m = n.minute
+
+    if 9 <= h < 12:
+        return True
+
+    if (h == 15 and m >= 30) or (16 <= h < 18):
+        return True
+
+    return False
+
+# ===== NEWS FILTER =====
+def is_news_time():
+    n = now()
+    for t in NEWS_TIMES:
+        hh, mm = map(int, t.split(":"))
+        news_dt = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+        delta = abs((n - news_dt).total_seconds()) / 60
+
+        if delta <= NEWS_PAUSE_MIN:
+            return True
+
+    return False
 
 # ===== SETTINGS =====
 RSI_BUY = 55
@@ -101,7 +141,6 @@ class Engine:
 
         self.m1=[];self.m5=[];self.m15=[]
 
-        # антиспам
         self.last_signal_candle=None
         self.last_signal_dir=None
         self.last_signal_prob=0
@@ -152,11 +191,18 @@ class Engine:
     def signal(self):
         if len(self.m15)<60:return None
 
+        # TIME FILTER
+        if not is_trading_time():
+            return None
+
+        # NEWS FILTER
+        if is_news_time():
+            return None
+
         # STOP
         if STATE["streak"]<=-3:
             return None
 
-        # cooldown
         now_ts=time.time()
         if now_ts-self.last_signal_time<self.cooldown:
             return None
@@ -201,7 +247,6 @@ class Engine:
 
         if prob<MIN_PROB:return None
 
-        # антидубль
         if self.last_signal_candle==candle:
             return None
 
@@ -217,7 +262,7 @@ class Engine:
             "dir":direction,
             "prob":round(prob*100,1),
             "symbol":self.s,
-            "time":now()
+            "time":now_str()
         }
 
 # ===== MULTI =====
@@ -264,7 +309,7 @@ def fmt(s):
         return "⛔ STOP (серія мінусів)"
 
     if not s:
-        return f"❌ Нема сигналу\n🕒 {now()}"
+        return f"❌ Нема сигналу\n🕒 {now_str()}"
 
     return (
         f"{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'} {s['symbol']}\n"
@@ -288,9 +333,12 @@ async def callback(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"WR: {wr}% | streak: {STATE['streak']}")
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 BOT READY (PRO LEVEL)")
+    await update.message.reply_text("🔥 BOT READY (NEWS FILTER ON)")
 
 async def auto(context):
+    if not is_trading_time() or is_news_time():
+        return
+
     s=best()
     if s:
         await context.bot.send_message(context.job.chat_id,fmt(s),reply_markup=kb())
