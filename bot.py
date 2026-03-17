@@ -1,6 +1,7 @@
 import os, json, time, math, queue, threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
 import requests
 from dotenv import load_dotenv
 import pytz
@@ -18,12 +19,12 @@ def now():
 def mean(x): return sum(x)/len(x) if x else 0
 def stdev(x): return math.sqrt(mean([(i-mean(x))**2 for i in x])) if x else 0
 def pip(s): return 0.01 if "JPY" in s else 0.0001
+def sigmoid(x): return 1/(1+math.exp(-x))
 
-# ===== SETTINGS (з backtest) =====
+# ===== SETTINGS =====
 RSI_BUY = 55
 RSI_SELL = 45
 ATR_FILTER = 0.0005
-SCORE_THRESHOLD = 60
 MIN_PROB = 0.7
 
 # ===== STORAGE =====
@@ -31,9 +32,11 @@ FILE = "bot_state.json"
 
 def load():
     if not os.path.exists(FILE):
-        return {"wins":0,"losses":0,"streak":0,
-                "weights":{"trend":1,"rsi":1,"atr":1,"momentum":1,"m1":1,"sr":1,"chop":1},
-                "bias":0}
+        return {
+            "wins":0,"losses":0,"streak":0,
+            "weights":{"trend":1,"rsi":1,"momentum":1,"m1":1,"chop":1},
+            "bias":0
+        }
     return json.load(open(FILE))
 
 def save(d): json.dump(d,open(FILE,"w"))
@@ -53,7 +56,7 @@ class Candle:
 class Builder:
     def __init__(self,tf):
         self.tf=tf;self.cur=None;self.last=None
-    def bucket(self,ts):return ts-ts%self.tf
+    def bucket(self,ts): return ts-ts%self.tf
     def tick(self,ts,p):
         b=self.bucket(ts)
         if not self.cur:
@@ -86,18 +89,24 @@ def atr(h,l,c,p=14):
         trs.append(max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])))
     return mean(trs[-p:]) if len(trs)>=p else None
 
-def sigmoid(x): return 1/(1+math.exp(-x))
-
 # ===== ENGINE =====
 class Engine:
     def __init__(self,s):
         self.s=s
         self.q=queue.Queue()
+
         self.b1=Builder(60)
         self.b5=Builder(300)
         self.b15=Builder(900)
+
         self.m1=[];self.m5=[];self.m15=[]
-        self.last_feat=None
+
+        # антиспам
+        self.last_signal_candle=None
+        self.last_signal_dir=None
+        self.last_signal_prob=0
+        self.last_signal_time=0
+        self.cooldown=180
 
     def start(self):
         threading.Thread(target=self.stream,daemon=True).start()
@@ -123,6 +132,7 @@ class Engine:
     def loop(self):
         while True:
             ts,p=self.q.get()
+
             self.b1.tick(ts,p)
             self.b5.tick(ts,p)
             self.b15.tick(ts,p)
@@ -135,8 +145,24 @@ class Engine:
             self.m5=self.m5[-200:]
             self.m15=self.m15[-200:]
 
+    def get_last_candle(self):
+        if not self.m5:return None
+        return self.m5[-1].t
+
     def signal(self):
         if len(self.m15)<60:return None
+
+        # STOP
+        if STATE["streak"]<=-3:
+            return None
+
+        # cooldown
+        now_ts=time.time()
+        if now_ts-self.last_signal_time<self.cooldown:
+            return None
+
+        candle=self.get_last_candle()
+        if not candle:return None
 
         closes=[c.c for c in self.m15]
         highs=[c.h for c in self.m15]
@@ -146,31 +172,27 @@ class Engine:
         e50=ema(closes,50)
         if not e20 or not e50:return None
 
-        direction=1 if e20>e50 else 0
+        direction="BUY" if e20>e50 else "SELL"
 
         r=rsi(closes)
         a=atr(highs,lows,closes)
-
         if not r or not a:return None
         if a<ATR_FILTER:return None
 
-        score=0
+        score=STATE["weights"]["trend"]
 
-        if direction: score+=STATE["weights"]["trend"]
-        else: score+=STATE["weights"]["trend"]
-
-        if direction and r>RSI_BUY: score+=STATE["weights"]["rsi"]
-        if not direction and r<RSI_SELL: score+=STATE["weights"]["rsi"]
+        if direction=="BUY" and r>RSI_BUY: score+=STATE["weights"]["rsi"]
+        if direction=="SELL" and r<RSI_SELL: score+=STATE["weights"]["rsi"]
 
         last3=self.m5[-3:]
         ups=sum(1 for c in last3 if c.dir=="UP")
         downs=sum(1 for c in last3 if c.dir=="DOWN")
 
-        if direction and ups>=2: score+=STATE["weights"]["momentum"]
-        if not direction and downs>=2: score+=STATE["weights"]["momentum"]
+        if direction=="BUY" and ups>=2: score+=STATE["weights"]["momentum"]
+        if direction=="SELL" and downs>=2: score+=STATE["weights"]["momentum"]
 
-        if direction and self.m1[-1].dir=="UP": score+=STATE["weights"]["m1"]
-        if not direction and self.m1[-1].dir=="DOWN": score+=STATE["weights"]["m1"]
+        if direction=="BUY" and self.m1[-1].dir=="UP": score+=STATE["weights"]["m1"]
+        if direction=="SELL" and self.m1[-1].dir=="DOWN": score+=STATE["weights"]["m1"]
 
         ch=stdev(closes[-20:])
         if ch>pip(self.s)*2: score+=STATE["weights"]["chop"]
@@ -179,10 +201,20 @@ class Engine:
 
         if prob<MIN_PROB:return None
 
-        self.last_feat={"score":score}
+        # антидубль
+        if self.last_signal_candle==candle:
+            return None
+
+        if direction==self.last_signal_dir and prob<=self.last_signal_prob:
+            return None
+
+        self.last_signal_candle=candle
+        self.last_signal_dir=direction
+        self.last_signal_prob=prob
+        self.last_signal_time=now_ts
 
         return {
-            "dir":"BUY" if direction else "SELL",
+            "dir":direction,
             "prob":round(prob*100,1),
             "symbol":self.s,
             "time":now()
@@ -256,7 +288,7 @@ async def callback(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"WR: {wr}% | streak: {STATE['streak']}")
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 BOT READY (HEDGE LEVEL)")
+    await update.message.reply_text("🔥 BOT READY (PRO LEVEL)")
 
 async def auto(context):
     s=best()
@@ -271,12 +303,12 @@ def main():
     app.add_handler(CallbackQueryHandler(callback))
 
     async def start_auto(update:Update,context:ContextTypes.DEFAULT_TYPE):
-        context.job_queue.run_repeating(auto,interval=60,first=10,chat_id=update.effective_chat.id)
+        context.job_queue.run_repeating(auto,interval=120,first=10,chat_id=update.effective_chat.id)
         await update.message.reply_text("✅ Автосигнали увімкнено")
 
     app.add_handler(CommandHandler("auto",start_auto))
 
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
     main()
