@@ -866,24 +866,18 @@ def get_stats() -> str:
     win_rate = (STATE["wins"] / total * 100) if total > 0 else 0
     profit_pct = ((BALANCE - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
     
-    return (
-        f"📊 СТАТИСТИКА
-"
-        f"━━━━━━━━━━━━━━━
-"
-        f"💰 Баланс: ${BALANCE:.2f}
-"
-        f"📈 P/L: {profit_pct:+.1f}%
-"
-        f"✅ Виграші: {STATE['wins']}
-"
-        f"❌ Програші: {STATE['losses']}
-"
-        f"🎯 Win Rate: {win_rate:.1f}%
-"
-        f"🔥 Серія: {STATE['streak']}
-"
-        f"📅 Угод сьогодні: {STATE['daily_trades']}"
+   return f"""📊 СТАТИСТИКА
+
+______________
+
+💰 Баланс: ${BALANCE:.2f}
+📈 P/L: {profit_pct:+.1f}%
+✅ Виграші: {STATE['wins']}
+❌ Програші: {STATE['losses']}
+🎯 Win Rate: {win_rate:.1f}%
+🔥 Серія: {STATE['streak']}
+📊 Угод сьогодні: {STATE['daily_trades']}
+"""
     )
 
 def format_signal(signal: Optional[Dict]) -> str:
