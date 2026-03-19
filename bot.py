@@ -1025,7 +1025,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = "✅ WIN записано" if query.data == "win" else "❌ LOSS записано"
     await query.edit_message_text(f"{result}\n\n{get_stats()}")
 
-{get_stats()}")
+await query.edit_message_text(f"{result}\n\n{get_stats()}")
 
 async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
     """Auto signal job"""
