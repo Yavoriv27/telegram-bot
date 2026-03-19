@@ -38,14 +38,14 @@ def get_session():
         return "LONDON"
     # New York overlap: 15:30-18:00 Kyiv (highest volatility)
     if 15 <= h < 18:
-        return \"NY_OVERLAP\"
+        return "NY_OVERLAP"
     # Asian Session: 02:00-10:00 Kyiv (best for JPY)
     if 2 <= h < 10:
-        return \"ASIAN\"
-    return \"OFF\"
+        return "ASIAN"
+    return "OFF"
 
 def is_trading_time():
-    \"\"\"Only trade during optimal sessions\"\"\"
+    """Only trade during optimal sessions"""
     n = now()
     h = n.hour
     m = n.minute
@@ -68,13 +68,13 @@ def is_trading_time():
     return False
 
 # High-impact news times (Kyiv time) - avoid 15 min before/after
-NEWS_TIMES = [\"15:30\", \"16:00\", \"17:00\", \"11:00\"]
+NEWS_TIMES = ["15:30", "16:00", "17:00", "11:00"]
 
 def is_news_time():
-    \"\"\"Avoid trading around news releases\"\"\"
+    """Avoid trading around news releases"""
     n = now()
     for t in NEWS_TIMES:
-        hh, mm = map(int, t.split(\":\"))
+        hh, mm = map(int, t.split(":"))
         news = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
         diff = abs((n - news).total_seconds()) / 60
         if diff <= 15:
@@ -92,7 +92,7 @@ def stdev(x):
     return math.sqrt(sum((i - m) ** 2 for i in x) / (len(x) - 1))
 
 def pip_value(symbol):
-    return 0.01 if \"JPY\" in symbol else 0.0001
+    return 0.01 if "JPY" in symbol else 0.0001
 
 # ============== STRATEGY PARAMETERS ==============
 # RSI Settings
@@ -128,24 +128,24 @@ MAX_RISK_PERCENT = 0.10  # Max 10% on high-confidence trades
 PAYOUT = 0.80
 
 STATE = {
-    \"wins\": 0,
-    \"losses\": 0,
-    \"streak\": 0,
-    \"daily_trades\": 0,
-    \"daily_pnl\": 0,
-    \"last_trade_day\": None
+    "wins": 0,
+    "losses": 0,
+    "streak": 0,
+    "daily_trades": 0,
+    "daily_pnl": 0,
+    "last_trade_day": None
 }
 
 def reset_daily_stats():
-    \"\"\"Reset daily statistics\"\"\"
+    """Reset daily statistics"""
     today = now().date()
-    if STATE[\"last_trade_day\"] != today:
-        STATE[\"daily_trades\"] = 0
-        STATE[\"daily_pnl\"] = 0
-        STATE[\"last_trade_day\"] = today
+    if STATE["last_trade_day"] != today:
+        STATE["daily_trades"] = 0
+        STATE["daily_pnl"] = 0
+        STATE["last_trade_day"] = today
 
 def get_bet(confidence: float):
-    \"\"\"Calculate bet size based on Kelly Criterion modified\"\"\"
+    """Calculate bet size based on Kelly Criterion modified"""
     reset_daily_stats()
     
     # Base risk
@@ -158,37 +158,37 @@ def get_bet(confidence: float):
         base_risk = 0.07
     
     # Reduce risk after losses
-    if STATE[\"streak\"] < 0:
-        base_risk *= max(0.5, 1 + STATE[\"streak\"] * 0.1)
+    if STATE["streak"] < 0:
+        base_risk *= max(0.5, 1 + STATE["streak"] * 0.1)
     
     bet = round(BALANCE * base_risk, 2)
     return max(10, min(bet, BALANCE * 0.15))  # Min $10, Max 15% of balance
 
 def risk_block():
-    \"\"\"Check if trading should be blocked\"\"\"
+    """Check if trading should be blocked"""
     reset_daily_stats()
     
     profit_pct = (BALANCE - INITIAL_BALANCE) / INITIAL_BALANCE
     
     # Daily loss limit: -10%
-    if STATE[\"daily_pnl\"] <= -INITIAL_BALANCE * 0.10:
-        return \"⛔ ДЕННИЙ ЛІМІТ ВТРАТ\"
+    if STATE["daily_pnl"] <= -INITIAL_BALANCE * 0.10:
+        return "⛔ ДЕННИЙ ЛІМІТ ВТРАТ"
     
     # Daily profit target: +15%
-    if STATE[\"daily_pnl\"] >= INITIAL_BALANCE * 0.15:
-        return \"💰 ДЕННА ЦІЛЬ ДОСЯГНУТА\"
+    if STATE["daily_pnl"] >= INITIAL_BALANCE * 0.15:
+        return "💰 ДЕННА ЦІЛЬ ДОСЯГНУТА"
     
     # Max 6 trades per day
-    if STATE[\"daily_trades\"] >= 6:
-        return \"⛔ ЛІМІТ УГОД НА ДЕНЬ\"
+    if STATE["daily_trades"] >= 6:
+        return "⛔ ЛІМІТ УГОД НА ДЕНЬ"
     
     # Losing streak protection
-    if STATE[\"streak\"] <= -3:
-        return \"⛔ СТОП (серія втрат)\"
+    if STATE["streak"] <= -3:
+        return "⛔ СТОП (серія втрат)"
     
     # Overall drawdown protection
     if profit_pct <= -0.25:
-        return \"⛔ КРИТИЧНИЙ DRAWDOWN\"
+        return "⛔ КРИТИЧНИЙ DRAWDOWN"
     
     return None
 
@@ -262,7 +262,7 @@ class CandleBuilder:
 
 # ============== TECHNICAL INDICATORS ==============
 def ema(prices: List[float], period: int) -> Optional[float]:
-    \"\"\"Exponential Moving Average\"\"\"
+    """Exponential Moving Average"""
     if len(prices) < period:
         return None
     k = 2 / (period + 1)
@@ -272,13 +272,13 @@ def ema(prices: List[float], period: int) -> Optional[float]:
     return ema_val
 
 def sma(prices: List[float], period: int) -> Optional[float]:
-    \"\"\"Simple Moving Average\"\"\"
+    """Simple Moving Average"""
     if len(prices) < period:
         return None
     return mean(prices[-period:])
 
 def rsi(prices: List[float], period: int = RSI_PERIOD) -> Optional[float]:
-    \"\"\"Relative Strength Index\"\"\"
+    """Relative Strength Index"""
     if len(prices) < period + 1:
         return None
     
@@ -307,7 +307,7 @@ def rsi(prices: List[float], period: int = RSI_PERIOD) -> Optional[float]:
     return 100 - (100 / (1 + rs))
 
 def macd(prices: List[float]) -> Optional[Dict]:
-    \"\"\"MACD with signal and histogram\"\"\"
+    """MACD with signal and histogram"""
     if len(prices) < MACD_SLOW + MACD_SIGNAL:
         return None
     
@@ -343,16 +343,16 @@ def macd(prices: List[float]) -> Optional[Dict]:
     prev_histogram = prev_macd - prev_signal if prev_signal else 0
     
     return {
-        \"macd\": macd_line,
-        \"signal\": signal_line,
-        \"histogram\": histogram,
-        \"prev_histogram\": prev_histogram,
-        \"crossover_up\": prev_macd < prev_signal and macd_line > signal_line,
-        \"crossover_down\": prev_macd > prev_signal and macd_line < signal_line
+        "macd": macd_line,
+        "signal": signal_line,
+        "histogram": histogram,
+        "prev_histogram": prev_histogram,
+        "crossover_up": prev_macd < prev_signal and macd_line > signal_line,
+        "crossover_down": prev_macd > prev_signal and macd_line < signal_line
     }
 
 def bollinger_bands(prices: List[float], period: int = BB_PERIOD, std_mult: float = BB_STD) -> Optional[Dict]:
-    \"\"\"Bollinger Bands\"\"\"
+    """Bollinger Bands"""
     if len(prices) < period:
         return None
     
@@ -373,18 +373,18 @@ def bollinger_bands(prices: List[float], period: int = BB_PERIOD, std_mult: floa
     percent_b = (current_price - lower) / (upper - lower) if upper != lower else 0.5
     
     return {
-        \"upper\": upper,
-        \"middle\": middle,
-        \"lower\": lower,
-        \"bandwidth\": bandwidth,
-        \"percent_b\": percent_b,
-        \"squeeze\": bandwidth < 0.02,  # Squeeze condition
-        \"at_upper\": current_price >= upper,
-        \"at_lower\": current_price <= lower
+        "upper": upper,
+        "middle": middle,
+        "lower": lower,
+        "bandwidth": bandwidth,
+        "percent_b": percent_b,
+        "squeeze": bandwidth < 0.02,  # Squeeze condition
+        "at_upper": current_price >= upper,
+        "at_lower": current_price <= lower
     }
 
 def atr(highs: List[float], lows: List[float], closes: List[float], period: int = ATR_PERIOD) -> Optional[float]:
-    \"\"\"Average True Range\"\"\"
+    """Average True Range"""
     if len(closes) < period + 1:
         return None
     
@@ -403,9 +403,9 @@ def atr(highs: List[float], lows: List[float], closes: List[float], period: int 
     return mean(true_ranges[-period:])
 
 def support_resistance(candles: List[Candle], lookback: int = 50) -> Dict:
-    \"\"\"Detect support and resistance levels\"\"\"
+    """Detect support and resistance levels"""
     if len(candles) < lookback:
-        return {\"support\": [], \"resistance\": []}
+        return {"support": [], "resistance": []}
     
     recent = candles[-lookback:]
     
@@ -428,12 +428,12 @@ def support_resistance(candles: List[Candle], lookback: int = 50) -> Dict:
             support_levels.append(lows[i])
     
     return {
-        \"support\": sorted(support_levels)[-3:] if support_levels else [],
-        \"resistance\": sorted(resistance_levels)[:3] if resistance_levels else []
+        "support": sorted(support_levels)[-3:] if support_levels else [],
+        "resistance": sorted(resistance_levels)[:3] if resistance_levels else []
     }
 
 def detect_candlestick_pattern(candles: List[Candle]) -> Optional[Dict]:
-    \"\"\"Detect candlestick patterns\"\"\"
+    """Detect candlestick patterns"""
     if len(candles) < 3:
         return None
     
@@ -446,45 +446,45 @@ def detect_candlestick_pattern(candles: List[Candle]) -> Optional[Dict]:
     # Bullish Engulfing
     if c2.is_bearish and c3.is_bullish:
         if c3.o < c2.c and c3.c > c2.o:
-            patterns.append({\"name\": \"BULLISH_ENGULFING\", \"direction\": \"BUY\", \"strength\": 0.8})
+            patterns.append({"name": "BULLISH_ENGULFING", "direction": "BUY", "strength": 0.8})
     
     # Bearish Engulfing
     if c2.is_bullish and c3.is_bearish:
         if c3.o > c2.c and c3.c < c2.o:
-            patterns.append({\"name\": \"BEARISH_ENGULFING\", \"direction\": \"SELL\", \"strength\": 0.8})
+            patterns.append({"name": "BEARISH_ENGULFING", "direction": "SELL", "strength": 0.8})
     
     # Bullish Pin Bar (Hammer)
     if c3.lower_wick > c3.body * 2 and c3.upper_wick < c3.body * 0.5:
-        patterns.append({\"name\": \"HAMMER\", \"direction\": \"BUY\", \"strength\": 0.7})
+        patterns.append({"name": "HAMMER", "direction": "BUY", "strength": 0.7})
     
     # Bearish Pin Bar (Shooting Star)
     if c3.upper_wick > c3.body * 2 and c3.lower_wick < c3.body * 0.5:
-        patterns.append({\"name\": \"SHOOTING_STAR\", \"direction\": \"SELL\", \"strength\": 0.7})
+        patterns.append({"name": "SHOOTING_STAR", "direction": "SELL", "strength": 0.7})
     
     # Morning Star (Bullish reversal)
     if c1.is_bearish and c2.is_doji and c3.is_bullish:
         if c3.c > (c1.o + c1.c) / 2:
-            patterns.append({\"name\": \"MORNING_STAR\", \"direction\": \"BUY\", \"strength\": 0.85})
+            patterns.append({"name": "MORNING_STAR", "direction": "BUY", "strength": 0.85})
     
     # Evening Star (Bearish reversal)
     if c1.is_bullish and c2.is_doji and c3.is_bearish:
         if c3.c < (c1.o + c1.c) / 2:
-            patterns.append({\"name\": \"EVENING_STAR\", \"direction\": \"SELL\", \"strength\": 0.85})
+            patterns.append({"name": "EVENING_STAR", "direction": "SELL", "strength": 0.85})
     
     # Three White Soldiers
     if all(c.is_bullish for c in [c1, c2, c3]):
         if c2.c > c1.c and c3.c > c2.c:
-            patterns.append({\"name\": \"THREE_WHITE_SOLDIERS\", \"direction\": \"BUY\", \"strength\": 0.75})
+            patterns.append({"name": "THREE_WHITE_SOLDIERS", "direction": "BUY", "strength": 0.75})
     
     # Three Black Crows
     if all(c.is_bearish for c in [c1, c2, c3]):
         if c2.c < c1.c and c3.c < c2.c:
-            patterns.append({\"name\": \"THREE_BLACK_CROWS\", \"direction\": \"SELL\", \"strength\": 0.75})
+            patterns.append({"name": "THREE_BLACK_CROWS", "direction": "SELL", "strength": 0.75})
     
     return patterns[0] if patterns else None
 
 def detect_divergence(prices: List[float], rsi_values: List[float]) -> Optional[str]:
-    \"\"\"Detect RSI divergence\"\"\"
+    """Detect RSI divergence"""
     if len(prices) < 10 or len(rsi_values) < 10:
         return None
     
@@ -501,11 +501,11 @@ def detect_divergence(prices: List[float], rsi_values: List[float]) -> Optional[
     
     # Bullish divergence: price lower low, RSI higher low
     if recent_price_low < prev_price_low and recent_rsi_low > prev_rsi_low:
-        return \"BULLISH_DIVERGENCE\"
+        return "BULLISH_DIVERGENCE"
     
     # Bearish divergence: price higher high, RSI lower high
     if recent_price_high > prev_price_high and recent_rsi_high < prev_rsi_high:
-        return \"BEARISH_DIVERGENCE\"
+        return "BEARISH_DIVERGENCE"
     
     return None
 
@@ -540,10 +540,10 @@ class TradingEngine:
         threading.Thread(target=self._process, daemon=True).start()
     
     def _stream(self):
-        \"\"\"Stream price data from OANDA\"\"\"
-        url = f\"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream\"
-        headers = {\"Authorization\": f\"Bearer {os.getenv('OANDA_API_KEY')}\"}
-        params = {\"instruments\": self.symbol}
+        """Stream price data from OANDA"""
+        url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
+        headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
+        params = {"instruments": self.symbol}
         
         while True:
             try:
@@ -552,17 +552,17 @@ class TradingEngine:
                     if not line:
                         continue
                     data = json.loads(line.decode())
-                    if data.get(\"type\") == \"PRICE\":
-                        bid = float(data[\"bids\"][0][\"price\"])
-                        ask = float(data[\"asks\"][0][\"price\"])
+                    if data.get("type") == "PRICE":
+                        bid = float(data["bids"][0]["price"])
+                        ask = float(data["asks"][0]["price"])
                         mid = (bid + ask) / 2
                         self.queue.put((time.time(), mid))
             except Exception as e:
-                print(f\"Stream error {self.symbol}: {e}\")
+                print(f"Stream error {self.symbol}: {e}")
                 time.sleep(5)
     
     def _process(self):
-        \"\"\"Process incoming price data\"\"\"
+        """Process incoming price data"""
         while True:
             try:
                 ts, price = self.queue.get(timeout=5)
@@ -595,10 +595,10 @@ class TradingEngine:
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f\"Process error {self.symbol}: {e}\")
+                print(f"Process error {self.symbol}: {e}")
     
     def analyze(self) -> Optional[Dict]:
-        \"\"\"Comprehensive market analysis\"\"\"
+        """Comprehensive market analysis"""
         if len(self.m1_candles) < 50 or len(self.m5_candles) < 20:
             return None
         
@@ -611,71 +611,71 @@ class TradingEngine:
         
         # Calculate indicators
         analysis = {
-            \"symbol\": self.symbol,
-            \"price\": self.current_price,
-            \"timestamp\": now_str()
+            "symbol": self.symbol,
+            "price": self.current_price,
+            "timestamp": now_str()
         }
         
         # 1. RSI Analysis
         rsi_val = rsi(m1_closes)
         if rsi_val:
-            analysis[\"rsi\"] = {
-                \"value\": round(rsi_val, 2),
-                \"overbought\": rsi_val >= RSI_OVERBOUGHT,
-                \"oversold\": rsi_val <= RSI_OVERSOLD,
-                \"strong_ob\": rsi_val >= RSI_STRONG_OB,
-                \"strong_os\": rsi_val <= RSI_STRONG_OS
+            analysis["rsi"] = {
+                "value": round(rsi_val, 2),
+                "overbought": rsi_val >= RSI_OVERBOUGHT,
+                "oversold": rsi_val <= RSI_OVERSOLD,
+                "strong_ob": rsi_val >= RSI_STRONG_OB,
+                "strong_os": rsi_val <= RSI_STRONG_OS
             }
         
         # 2. MACD Analysis
         macd_data = macd(m1_closes)
         if macd_data:
-            analysis[\"macd\"] = macd_data
+            analysis["macd"] = macd_data
         
         # 3. Bollinger Bands
         bb_data = bollinger_bands(m1_closes)
         if bb_data:
-            analysis[\"bollinger\"] = bb_data
+            analysis["bollinger"] = bb_data
         
         # 4. ATR for volatility
         atr_val = atr(m1_highs, m1_lows, m1_closes)
         if atr_val:
             pip_size = pip_value(self.symbol)
             atr_pips = atr_val / pip_size
-            analysis[\"atr\"] = {
-                \"value\": atr_val,
-                \"pips\": round(atr_pips, 1),
-                \"normal\": ATR_MIN_MULTIPLIER < atr_pips < ATR_MAX_MULTIPLIER * 10
+            analysis["atr"] = {
+                "value": atr_val,
+                "pips": round(atr_pips, 1),
+                "normal": ATR_MIN_MULTIPLIER < atr_pips < ATR_MAX_MULTIPLIER * 10
             }
         
         # 5. Support/Resistance
         sr_levels = support_resistance(self.m5_candles)
-        analysis[\"sr_levels\"] = sr_levels
+        analysis["sr_levels"] = sr_levels
         
         # 6. Candlestick Pattern
         pattern = detect_candlestick_pattern(self.m1_candles)
         if pattern:
-            analysis[\"pattern\"] = pattern
+            analysis["pattern"] = pattern
         
         # 7. Divergence
         if len(self.rsi_history) >= 10:
             divergence = detect_divergence(m1_closes[-20:], self.rsi_history[-20:])
             if divergence:
-                analysis[\"divergence\"] = divergence
+                analysis["divergence"] = divergence
         
         # 8. Trend (M5 EMA)
         ema20 = ema(m5_closes, 20)
         ema50 = ema(m5_closes, 50)
         if ema20 and ema50:
-            analysis[\"trend\"] = {
-                \"direction\": \"UP\" if ema20 > ema50 else \"DOWN\",
-                \"strength\": abs(ema20 - ema50) / self.current_price * 10000  # In pips
+            analysis["trend"] = {
+                "direction": "UP" if ema20 > ema50 else "DOWN",
+                "strength": abs(ema20 - ema50) / self.current_price * 10000  # In pips
             }
         
         return analysis
     
     def generate_signal(self) -> Optional[Dict]:
-        \"\"\"Generate trading signal based on confluence\"\"\"
+        """Generate trading signal based on confluence"""
         
         # Check trading conditions
         if not is_trading_time():
@@ -702,93 +702,93 @@ class TradingEngine:
         reasons_sell = []
         
         # 1. RSI (weight: 1)
-        if \"rsi\" in analysis:
-            rsi_data = analysis[\"rsi\"]
-            if rsi_data[\"strong_os\"]:
+        if "rsi" in analysis:
+            rsi_data = analysis["rsi"]
+            if rsi_data["strong_os"]:
                 buy_score += 1.5
-                reasons_buy.append(f\"RSI перепроданий ({rsi_data['value']})\")
-            elif rsi_data[\"oversold\"]:
+                reasons_buy.append(f"RSI перепроданий ({rsi_data['value']})")
+            elif rsi_data["oversold"]:
                 buy_score += 1
-                reasons_buy.append(f\"RSI низький ({rsi_data['value']})\")
+                reasons_buy.append(f"RSI низький ({rsi_data['value']})")
             
-            if rsi_data[\"strong_ob\"]:
+            if rsi_data["strong_ob"]:
                 sell_score += 1.5
-                reasons_sell.append(f\"RSI перекуплений ({rsi_data['value']})\")
-            elif rsi_data[\"overbought\"]:
+                reasons_sell.append(f"RSI перекуплений ({rsi_data['value']})")
+            elif rsi_data["overbought"]:
                 sell_score += 1
-                reasons_sell.append(f\"RSI високий ({rsi_data['value']})\")
+                reasons_sell.append(f"RSI високий ({rsi_data['value']})")
         
         # 2. MACD (weight: 1)
-        if \"macd\" in analysis:
-            macd_data = analysis[\"macd\"]
-            if macd_data[\"crossover_up\"]:
+        if "macd" in analysis:
+            macd_data = analysis["macd"]
+            if macd_data["crossover_up"]:
                 buy_score += 1.5
-                reasons_buy.append(\"MACD бичаче перетин\")
-            elif macd_data[\"histogram\"] > 0 and macd_data[\"histogram\"] > macd_data[\"prev_histogram\"]:
+                reasons_buy.append("MACD бичаче перетин")
+            elif macd_data["histogram"] > 0 and macd_data["histogram"] > macd_data["prev_histogram"]:
                 buy_score += 0.5
-                reasons_buy.append(\"MACD зростає\")
+                reasons_buy.append("MACD зростає")
             
-            if macd_data[\"crossover_down\"]:
+            if macd_data["crossover_down"]:
                 sell_score += 1.5
-                reasons_sell.append(\"MACD ведмеже перетин\")
-            elif macd_data[\"histogram\"] < 0 and macd_data[\"histogram\"] < macd_data[\"prev_histogram\"]:
+                reasons_sell.append("MACD ведмеже перетин")
+            elif macd_data["histogram"] < 0 and macd_data["histogram"] < macd_data["prev_histogram"]:
                 sell_score += 0.5
-                reasons_sell.append(\"MACD падає\")
+                reasons_sell.append("MACD падає")
         
         # 3. Bollinger Bands (weight: 1)
-        if \"bollinger\" in analysis:
-            bb_data = analysis[\"bollinger\"]
-            if bb_data[\"at_lower\"] and not bb_data[\"squeeze\"]:
+        if "bollinger" in analysis:
+            bb_data = analysis["bollinger"]
+            if bb_data["at_lower"] and not bb_data["squeeze"]:
                 buy_score += 1
-                reasons_buy.append(\"Ціна на нижній BB\")
-            if bb_data[\"at_upper\"] and not bb_data[\"squeeze\"]:
+                reasons_buy.append("Ціна на нижній BB")
+            if bb_data["at_upper"] and not bb_data["squeeze"]:
                 sell_score += 1
-                reasons_sell.append(\"Ціна на верхній BB\")
-            if bb_data[\"squeeze\"]:
+                reasons_sell.append("Ціна на верхній BB")
+            if bb_data["squeeze"]:
                 # Squeeze - wait for breakout
                 buy_score -= 0.5
                 sell_score -= 0.5
         
         # 4. Candlestick Pattern (weight: 1)
-        if \"pattern\" in analysis:
-            pattern = analysis[\"pattern\"]
-            if pattern[\"direction\"] == \"BUY\":
-                buy_score += pattern[\"strength\"]
-                reasons_buy.append(f\"Патерн: {pattern['name']}\")
+        if "pattern" in analysis:
+            pattern = analysis["pattern"]
+            if pattern["direction"] == "BUY":
+                buy_score += pattern["strength"]
+                reasons_buy.append(f"Патерн: {pattern['name']}")
             else:
-                sell_score += pattern[\"strength\"]
-                reasons_sell.append(f\"Патерн: {pattern['name']}\")
+                sell_score += pattern["strength"]
+                reasons_sell.append(f"Патерн: {pattern['name']}")
         
         # 5. Divergence (weight: 1.5)
-        if \"divergence\" in analysis:
-            if analysis[\"divergence\"] == \"BULLISH_DIVERGENCE\":
+        if "divergence" in analysis:
+            if analysis["divergence"] == "BULLISH_DIVERGENCE":
                 buy_score += 1.5
-                reasons_buy.append(\"Бича дивергенція\")
+                reasons_buy.append("Бича дивергенція")
             else:
                 sell_score += 1.5
-                reasons_sell.append(\"Ведмежа дивергенція\")
+                reasons_sell.append("Ведмежа дивергенція")
         
         # 6. Trend Alignment (weight: 1)
-        if \"trend\" in analysis:
-            trend = analysis[\"trend\"]
-            if trend[\"direction\"] == \"UP\" and trend[\"strength\"] > 2:
+        if "trend" in analysis:
+            trend = analysis["trend"]
+            if trend["direction"] == "UP" and trend["strength"] > 2:
                 buy_score += 1
-                reasons_buy.append(\"Висхідний тренд\")
-            elif trend[\"direction\"] == \"DOWN\" and trend[\"strength\"] > 2:
+                reasons_buy.append("Висхідний тренд")
+            elif trend["direction"] == "DOWN" and trend["strength"] > 2:
                 sell_score += 1
-                reasons_sell.append(\"Низхідний тренд\")
+                reasons_sell.append("Низхідний тренд")
         
         # Check ATR for normal volatility
-        if \"atr\" in analysis and not analysis[\"atr\"][\"normal\"]:
+        if "atr" in analysis and not analysis["atr"]["normal"]:
             return None  # Skip abnormal volatility
         
         # Determine direction and check confluence
         if buy_score >= MIN_CONFLUENCE_SCORE and buy_score > sell_score:
-            direction = \"BUY\"
+            direction = "BUY"
             score = buy_score
             reasons = reasons_buy
         elif sell_score >= MIN_CONFLUENCE_SCORE and sell_score > buy_score:
-            direction = \"SELL\"
+            direction = "SELL"
             score = sell_score
             reasons = reasons_sell
         else:
@@ -805,19 +805,19 @@ class TradingEngine:
         self.last_signal_time = now_ts
         
         return {
-            \"symbol\": self.symbol,
-            \"direction\": direction,
-            \"probability\": round(probability * 100, 1),
-            \"confluence_score\": round(score, 1),
-            \"reasons\": reasons,
-            \"price\": analysis[\"price\"],
-            \"time\": analysis[\"timestamp\"],
-            \"rsi\": analysis.get(\"rsi\", {}).get(\"value\"),
-            \"atr_pips\": analysis.get(\"atr\", {}).get(\"pips\")
+            "symbol": self.symbol,
+            "direction": direction,
+            "probability": round(probability * 100, 1),
+            "confluence_score": round(score, 1),
+            "reasons": reasons,
+            "price": analysis["price"],
+            "time": analysis["timestamp"],
+            "rsi": analysis.get("rsi", {}).get("value"),
+            "atr_pips": analysis.get("atr", {}).get("pips")
         }
 
 # ============== BOT SETUP ==============
-SYMBOLS = [\"EUR_USD\", \"GBP_USD\", \"USD_JPY\"]
+SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 ENGINES = [TradingEngine(s) for s in SYMBOLS]
 
 # Start all engines
@@ -827,159 +827,159 @@ for engine in ENGINES:
 LAST_SIGNAL = None
 
 def get_best_signal() -> Optional[Dict]:
-    \"\"\"Get the best signal from all pairs\"\"\"
+    """Get the best signal from all pairs"""
     global LAST_SIGNAL
     
     best = None
     for engine in ENGINES:
         signal = engine.generate_signal()
         if signal:
-            if not best or signal[\"probability\"] > best[\"probability\"]:
+            if not best or signal["probability"] > best["probability"]:
                 best = signal
     
     LAST_SIGNAL = best
     return best
 
 def record_result(win: bool):
-    \"\"\"Record trade result\"\"\"
+    """Record trade result"""
     global BALANCE
     
-    bet = get_bet(LAST_SIGNAL[\"probability\"] / 100 if LAST_SIGNAL else 0.75)
+    bet = get_bet(LAST_SIGNAL["probability"] / 100 if LAST_SIGNAL else 0.75)
     
     if win:
         profit = bet * PAYOUT
         BALANCE += profit
-        STATE[\"wins\"] += 1
-        STATE[\"streak\"] = max(1, STATE[\"streak\"] + 1)
-        STATE[\"daily_pnl\"] += profit
+        STATE["wins"] += 1
+        STATE["streak"] = max(1, STATE["streak"] + 1)
+        STATE["daily_pnl"] += profit
     else:
         BALANCE -= bet
-        STATE[\"losses\"] += 1
-        STATE[\"streak\"] = min(-1, STATE[\"streak\"] - 1)
-        STATE[\"daily_pnl\"] -= bet
+        STATE["losses"] += 1
+        STATE["streak"] = min(-1, STATE["streak"] - 1)
+        STATE["daily_pnl"] -= bet
     
-    STATE[\"daily_trades\"] += 1
+    STATE["daily_trades"] += 1
 
 def get_stats() -> str:
-    \"\"\"Get trading statistics\"\"\"
-    total = STATE[\"wins\"] + STATE[\"losses\"]
-    win_rate = (STATE[\"wins\"] / total * 100) if total > 0 else 0
+    """Get trading statistics"""
+    total = STATE["wins"] + STATE["losses"]
+    win_rate = (STATE["wins"] / total * 100) if total > 0 else 0
     profit_pct = ((BALANCE - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
     
     return (
-        f\"📊 СТАТИСТИКА
-\"
-        f\"━━━━━━━━━━━━━━━
-\"
-        f\"💰 Баланс: ${BALANCE:.2f}
-\"
-        f\"📈 P/L: {profit_pct:+.1f}%
-\"
-        f\"✅ Виграші: {STATE['wins']}
-\"
-        f\"❌ Програші: {STATE['losses']}
-\"
-        f\"🎯 Win Rate: {win_rate:.1f}%
-\"
-        f\"🔥 Серія: {STATE['streak']}
-\"
-        f\"📅 Угод сьогодні: {STATE['daily_trades']}\"
+        f"📊 СТАТИСТИКА
+"
+        f"━━━━━━━━━━━━━━━
+"
+        f"💰 Баланс: ${BALANCE:.2f}
+"
+        f"📈 P/L: {profit_pct:+.1f}%
+"
+        f"✅ Виграші: {STATE['wins']}
+"
+        f"❌ Програші: {STATE['losses']}
+"
+        f"🎯 Win Rate: {win_rate:.1f}%
+"
+        f"🔥 Серія: {STATE['streak']}
+"
+        f"📅 Угод сьогодні: {STATE['daily_trades']}"
     )
 
 def format_signal(signal: Optional[Dict]) -> str:
-    \"\"\"Format signal for display\"\"\"
+    """Format signal for display"""
     block = risk_block()
     if block:
-        return f\"{block}
+        return f"{block}
 
-{get_stats()}\"
+{get_stats()}"
     
     if not signal:
         session = get_session()
-        status = \"🟢 АКТИВНА\" if is_trading_time() else \"🔴 НЕАКТИВНА\"
-        news = \"⚠️ НОВИНИ\" if is_news_time() else \"✅ Чисто\"
+        status = "🟢 АКТИВНА" if is_trading_time() else "🔴 НЕАКТИВНА"
+        news = "⚠️ НОВИНИ" if is_news_time() else "✅ Чисто"
         
         return (
-            f\"❌ Немає сигналу
-\"
-            f\"━━━━━━━━━━━━━━━
-\"
-            f\"🕒 {now_str()}
-\"
-            f\"📍 Сесія: {session} {status}
-\"
-            f\"📰 Новини: {news}
+            f"❌ Немає сигналу
+"
+            f"━━━━━━━━━━━━━━━
+"
+            f"🕒 {now_str()}
+"
+            f"📍 Сесія: {session} {status}
+"
+            f"📰 Новини: {news}
 
-\"
-            f\"Очікую якісний сетап...\"
+"
+            f"Очікую якісний сетап..."
         )
     
-    direction_emoji = \"🟢\" if signal[\"direction\"] == \"BUY\" else \"🔴\"
-    confidence = \"🔥🔥🔥\" if signal[\"probability\"] >= 80 else \"🔥🔥\" if signal[\"probability\"] >= 75 else \"🔥\"
+    direction_emoji = "🟢" if signal["direction"] == "BUY" else "🔴"
+    confidence = "🔥🔥🔥" if signal["probability"] >= 80 else "🔥🔥" if signal["probability"] >= 75 else "🔥"
     
-    reasons_text = \"
-\".join(f\"  • {r}\" for r in signal[\"reasons\"][:4])
+    reasons_text = "
+".join(f"  • {r}" for r in signal["reasons"][:4])
     
-    bet = get_bet(signal[\"probability\"] / 100)
+    bet = get_bet(signal["probability"] / 100)
     
     return (
-        f\"{direction_emoji} {signal['direction']} {signal['symbol'].replace('_', '/')}
-\"
-        f\"━━━━━━━━━━━━━━━
-\"
-        f\"📊 Ймовірність: {signal['probability']}% {confidence}
-\"
-        f\"🎯 Confluence: {signal['confluence_score']}/6
-\"
-        f\"💵 Ставка: ${bet}
-\"
-        f\"⏱ Експірація: 2 хв
-\"
-        f\"💰 Баланс: ${BALANCE:.2f}
-\"
-        f\"━━━━━━━━━━━━━━━
-\"
-        f\"📋 Причини:
+        f"{direction_emoji} {signal['direction']} {signal['symbol'].replace('_', '/')}
+"
+        f"━━━━━━━━━━━━━━━
+"
+        f"📊 Ймовірність: {signal['probability']}% {confidence}
+"
+        f"🎯 Confluence: {signal['confluence_score']}/6
+"
+        f"💵 Ставка: ${bet}
+"
+        f"⏱ Експірація: 2 хв
+"
+        f"💰 Баланс: ${BALANCE:.2f}
+"
+        f"━━━━━━━━━━━━━━━
+"
+        f"📋 Причини:
 {reasons_text}
-\"
-        f\"━━━━━━━━━━━━━━━
-\"
-        f\"RSI: {signal.get('rsi', 'N/A')} | ATR: {signal.get('atr_pips', 'N/A')} pips
-\"
-        f\"🕒 {signal['time']}\"
+"
+        f"━━━━━━━━━━━━━━━
+"
+        f"RSI: {signal.get('rsi', 'N/A')} | ATR: {signal.get('atr_pips', 'N/A')} pips
+"
+        f"🕒 {signal['time']}"
     )
 
 def keyboard():
-    \"\"\"Create result keyboard\"\"\"
+    """Create result keyboard"""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(\"✅ WIN\", callback_data=\"win\"),
-            InlineKeyboardButton(\"❌ LOSS\", callback_data=\"loss\")
+            InlineKeyboardButton("✅ WIN", callback_data="win"),
+            InlineKeyboardButton("❌ LOSS", callback_data="loss")
         ]
     ])
 
 # ============== TELEGRAM HANDLERS ==============
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        \"🤖 FOREX TRADING BOT
-\"
-        \"━━━━━━━━━━━━━━━
-\"
-        \"Multi-Indicator Confluence Strategy
-\"
-        \"Pairs: EUR/USD, GBP/USD, USD/JPY
-\"
-        \"━━━━━━━━━━━━━━━
-\"
-        \"Commands:
-\"
-        \"/signal - Get current signal
-\"
-        \"/stats - View statistics
-\"
-        \"/auto - Start auto signals
-\"
-        \"/stop - Stop auto signals\"
+        "🤖 FOREX TRADING BOT
+"
+        "━━━━━━━━━━━━━━━
+"
+        "Multi-Indicator Confluence Strategy
+"
+        "Pairs: EUR/USD, GBP/USD, USD/JPY
+"
+        "━━━━━━━━━━━━━━━
+"
+        "Commands:
+"
+        "/signal - Get current signal
+"
+        "/stats - View statistics
+"
+        "/auto - Start auto signals
+"
+        "/stop - Stop auto signals"
     )
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -993,14 +993,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    record_result(query.data == \"win\")
-    result = \"✅ WIN записано\" if query.data == \"win\" else \"❌ LOSS записано\"
-    await query.edit_message_text(f\"{result}
+    record_result(query.data == "win")
+    result = "✅ WIN записано" if query.data == "win" else "❌ LOSS записано"
+    await query.edit_message_text(f"{result}
 
-{get_stats()}\")
+{get_stats()}")
 
 async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
-    \"\"\"Auto signal job\"\"\"
+    """Auto signal job"""
     if not is_trading_time() or is_news_time():
         return
     
@@ -1014,7 +1014,7 @@ async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove existing jobs
-    current_jobs = context.job_queue.get_jobs_by_name(f\"auto_{update.effective_chat.id}\")
+    current_jobs = context.job_queue.get_jobs_by_name(f"auto_{update.effective_chat.id}")
     for job in current_jobs:
         job.schedule_removal()
     
@@ -1023,34 +1023,34 @@ async def cmd_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         interval=120,  # Check every 2 minutes
         first=10,
         chat_id=update.effective_chat.id,
-        name=f\"auto_{update.effective_chat.id}\"
+        name=f"auto_{update.effective_chat.id}"
     )
-    await update.message.reply_text(\"✅ Авто-сигнали увімкнено\")
+    await update.message.reply_text("✅ Авто-сигнали увімкнено")
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    current_jobs = context.job_queue.get_jobs_by_name(f\"auto_{update.effective_chat.id}\")
+    current_jobs = context.job_queue.get_jobs_by_name(f"auto_{update.effective_chat.id}")
     for job in current_jobs:
         job.schedule_removal()
-    await update.message.reply_text(\"🛑 Авто-сигнали вимкнено\")
+    await update.message.reply_text("🛑 Авто-сигнали вимкнено")
 
 def main():
-    \"\"\"Main entry point\"\"\"
-    token = os.getenv(\"TELEGRAM_BOT_TOKEN\")
+    """Main entry point"""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        print(\"ERROR: TELEGRAM_BOT_TOKEN not set\")
+        print("ERROR: TELEGRAM_BOT_TOKEN not set")
         return
     
     app = Application.builder().token(token).build()
     
-    app.add_handler(CommandHandler(\"start\", cmd_start))
-    app.add_handler(CommandHandler(\"signal\", cmd_signal))
-    app.add_handler(CommandHandler(\"stats\", cmd_stats))
-    app.add_handler(CommandHandler(\"auto\", cmd_auto))
-    app.add_handler(CommandHandler(\"stop\", cmd_stop))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("signal", cmd_signal))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("auto", cmd_auto))
+    app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print(\"🚀 Bot started...\")
+    print("🚀 Bot started...")
     app.run_polling(drop_pending_updates=True)
 
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     main()
