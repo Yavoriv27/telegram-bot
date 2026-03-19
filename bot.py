@@ -19,7 +19,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 load_dotenv()
 
 # ============== TIMEZONE ==============
-KYIV = pytz.timezone(\"Europe/Kyiv\")
+KYIV = pytz.timezone("Europe/Kyiv")
 
 def now():
     return datetime.now(timezone.utc).astimezone(KYIV)
