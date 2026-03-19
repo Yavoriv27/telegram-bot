@@ -865,8 +865,8 @@ def get_stats() -> str:
     total = STATE["wins"] + STATE["losses"]
     win_rate = (STATE["wins"] / total * 100) if total > 0 else 0
     profit_pct = ((BALANCE - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
-    
-   return f"""📊 СТАТИСТИКА
+
+    return f"""📊 СТАТИСТИКА
 
 ______________
 
@@ -878,15 +878,13 @@ ______________
 🔥 Серія: {STATE['streak']}
 📊 Угод сьогодні: {STATE['daily_trades']}
 """
-    )
+
 
 def format_signal(signal: Optional[Dict]) -> str:
     """Format signal for display"""
     block = risk_block()
     if block:
-        return f"{block}
-
-{get_stats()}"
+        return f"{block}\n\n{get_stats()}"
     
     if not signal:
         session = get_session()
@@ -894,54 +892,35 @@ def format_signal(signal: Optional[Dict]) -> str:
         news = "⚠️ НОВИНИ" if is_news_time() else "✅ Чисто"
         
         return (
-            f"❌ Немає сигналу
-"
-            f"━━━━━━━━━━━━━━━
-"
-            f"🕒 {now_str()}
-"
-            f"📍 Сесія: {session} {status}
-"
-            f"📰 Новини: {news}
-
-"
+            f"❌ Немає сигналу\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🕒 {now_str()}\n"
+            f"📍 Сесія: {session} {status}\n"
+            f"📰 Новини: {news}\n\n"
             f"Очікую якісний сетап..."
         )
     
     direction_emoji = "🟢" if signal["direction"] == "BUY" else "🔴"
     confidence = "🔥🔥🔥" if signal["probability"] >= 80 else "🔥🔥" if signal["probability"] >= 75 else "🔥"
     
-    reasons_text = "
-".join(f"  • {r}" for r in signal["reasons"][:4])
-    
+    reasons_text = "\n".join(f"  • {r}" for r in signal["reasons"][:4])
     bet = get_bet(signal["probability"] / 100)
     
     return (
-        f"{direction_emoji} {signal['direction']} {signal['symbol'].replace('_', '/')}
-"
-        f"━━━━━━━━━━━━━━━
-"
-        f"📊 Ймовірність: {signal['probability']}% {confidence}
-"
-        f"🎯 Confluence: {signal['confluence_score']}/6
-"
-        f"💵 Ставка: ${bet}
-"
-        f"⏱ Експірація: 2 хв
-"
-        f"💰 Баланс: ${BALANCE:.2f}
-"
-        f"━━━━━━━━━━━━━━━
-"
-        f"📋 Причини:
-{reasons_text}
-"
-        f"━━━━━━━━━━━━━━━
-"
-        f"RSI: {signal.get('rsi', 'N/A')} | ATR: {signal.get('atr_pips', 'N/A')} pips
-"
+        f"{direction_emoji} {signal['direction']} {signal['symbol'].replace('_', '/')}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📊 Ймовірність: {signal['probability']}% {confidence}\n"
+        f"🎯 Confluence: {signal['confluence_score']}/6\n"
+        f"💵 Ставка: ${bet}\n"
+        f"⏱ Експірація: 2 хв\n"
+        f"💰 Баланс: ${BALANCE:.2f}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📋 Причини:\n{reasons_text}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"RSI: {signal.get('rsi', 'N/A')} | ATR: {signal.get('atr_pips', 'N/A')} pips\n"
         f"🕒 {signal['time']}"
     )
+
 
 def keyboard():
     """Create result keyboard"""
@@ -952,29 +931,84 @@ def keyboard():
         ]
     ])
 
+
 # ============== TELEGRAM HANDLERS ==============
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 FOREX TRADING BOT
-"
-        "━━━━━━━━━━━━━━━
-"
-        "Multi-Indicator Confluence Strategy
-"
-        "Pairs: EUR/USD, GBP/USD, USD/JPY
-"
-        "━━━━━━━━━━━━━━━
-"
-        "Commands:
-"
-        "/signal - Get current signal
-"
-        "/stats - View statistics
-"
-        "/auto - Start auto signals
-"
+        "🤖 FOREX TRADING BOT\n"
+        "━━━━━━━━━━━━━━━\n"
+        "Multi-Indicator Confluence Strategy\n"
+        "Pairs: EUR/USD, GBP/USD, USD/JPY\n"
+        "━━━━━━━━━━━━━━━\n"
+        "Commands:\n"
+        "/signal - Get current signal\n"
+        "/stats - View statistics\n"
+        "/auto - Start auto signals\n"
         "/stop - Stop auto signals"
     )
+
+
+async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    signal = get_best_signal()
+    await update.message.reply_text(
+        format_signal(signal),
+        reply_markup=keyboard() if signal else None
+    )
+
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(get_stats())
+
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    record_result(query.data == "win")
+    result = "✅ WIN записано" if query.data == "win" else "❌ LOSS записано"
+    
+    await query.edit_message_text(f"{result}\n\n{get_stats()}")
+
+
+async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
+    """Auto signal job"""
+    if not is_trading_time() or is_news_time():
+        return
+    
+    signal = get_best_signal()
+    if signal:
+        await context.bot.send_message(
+            context.job.chat_id,
+            format_signal(signal),
+            reply_markup=keyboard()
+        )
+
+
+async def cmd_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    current_jobs = context.job_queue.get_jobs_by_name(f"auto_{update.effective_chat.id}")
+    
+    for job in current_jobs:
+        job.schedule_removal()
+    
+    context.job_queue.run_repeating(
+        auto_signal,
+        interval=120,
+        first=10,
+        chat_id=update.effective_chat.id,
+        name=f"auto_{update.effective_chat.id}"
+    )
+    
+    await update.message.reply_text("✅ Авто-сигнали увімкнено")
+
+
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    current_jobs = context.job_queue.get_jobs_by_name(f"auto_{update.effective_chat.id}")
+    
+    for job in current_jobs:
+        job.schedule_removal()
+    
+    await update.message.reply_text("🛑 Авто-сигнали вимкнено")
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     signal = get_best_signal()
