@@ -29,43 +29,14 @@ def now_str():
 
 # ============== TRADING SESSIONS ==============
 def get_session():
-    """Identify current trading session"""
-    n = now()
-    h = n.hour
-    
-    # London Session: 10:00-18:00 Kyiv (best for EUR pairs)
-    if 10 <= h < 18:
-        return "LONDON"
-    # New York overlap: 15:30-18:00 Kyiv (highest volatility)
-    if 15 <= h < 18:
-        return "NY_OVERLAP"
-    # Asian Session: 02:00-10:00 Kyiv (best for JPY)
-    if 2 <= h < 10:
-        return "ASIAN"
-    return "OFF"
+    """Always active session"""
+    return "ACTIVE"
+
 
 def is_trading_time():
-    """Only trade during optimal sessions"""
-    n = now()
-    h = n.hour
-    m = n.minute
-    weekday = n.weekday()
-    
-    # No trading on weekends
-    if weekday >= 5:
-        return False
-    
-    # London session: 10:00-12:30 and 14:00-17:30
-    if 10 <= h < 12:
-        return True
-    if h == 12 and m < 30:
-        return True
-    if 14 <= h < 17:
-        return True
-    if h == 17 and m < 30:
-        return True
-    
-    return False
+    """Trading always allowed"""
+    return True
+
 
 # High-impact news times (Kyiv time) - avoid 15 min before/after
 NEWS_TIMES = ["15:30", "16:00", "17:00", "11:00"]
