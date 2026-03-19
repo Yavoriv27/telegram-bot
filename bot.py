@@ -35,7 +35,7 @@ def get_session():
     
     # London Session: 10:00-18:00 Kyiv (best for EUR pairs)
     if 10 <= h < 18:
-        return \"LONDON\"
+        return "LONDON"
     # New York overlap: 15:30-18:00 Kyiv (highest volatility)
     if 15 <= h < 18:
         return \"NY_OVERLAP\"
