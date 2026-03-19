@@ -1023,7 +1023,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     record_result(query.data == "win")
     result = "✅ WIN записано" if query.data == "win" else "❌ LOSS записано"
-    await query.edit_message_text(f"{result}
+    await query.edit_message_text(f"{result}\n\n{get_stats()}")
 
 {get_stats()}")
 
