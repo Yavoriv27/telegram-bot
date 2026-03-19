@@ -25,7 +25,7 @@ def now():
     return datetime.now(timezone.utc).astimezone(KYIV)
 
 def now_str():
-    return now().strftime(\"%H:%M:%S\")
+    return now().strftime("%H:%M:%S")
 
 # ============== TRADING SESSIONS ==============
 def get_session():
