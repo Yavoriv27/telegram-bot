@@ -29,7 +29,7 @@ def now_str():
 
 # ============== TRADING SESSIONS ==============
 def get_session():
-    \"\"\"Identify current trading session\"\"\"
+    """Identify current trading session"""
     n = now()
     h = n.hour
     
