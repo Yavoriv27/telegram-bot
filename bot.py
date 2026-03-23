@@ -510,36 +510,37 @@ class TradingEngine:
         threading.Thread(target=self._stream, daemon=True).start()
         threading.Thread(target=self._process, daemon=True).start()
     
-    def _stream(self):
-        """Stream price data from OANDA"""
-        url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
-        headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
-        params = {"instruments": self.symbol}
-        
-        while True:
-            try:
-                r = requests.get(url, headers=headers, params=params, stream=True, timeout=30)
-        for line in r.iter_lines():
-            if not line:
-                continue
+def _stream(self):
+    url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
+    headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
+    params = {"instruments": self.symbol}
+    
+    while True:
+        try:
+            r = requests.get(url, headers=headers, params=params, stream=True, timeout=30)
 
-       try:
-            decoded = line.decode().strip()
-            if not decoded:
-                continue
+            for line in r.iter_lines():
+                if not line:
+                    continue
 
-        data = json.loads(decoded)
-    except Exception:
-        continue
-                    if data.get("type") == "PRICE":
-                        bid = float(data["bids"][0]["price"])
-                        ask = float(data["asks"][0]["price"])
-                        mid = (bid + ask) / 2
-                        self.queue.put((time.time(), mid))
-            except Exception:
-                print(f"Reconnect {self.symbol}...")
-                time.sleep(3)
-                time.sleep(5)
+                try:
+                    decoded = line.decode().strip()
+                    if not decoded:
+                        continue
+
+                    data = json.loads(decoded)
+                except Exception:
+                    continue
+
+                if data.get("type") == "PRICE":
+                    bid = float(data["bids"][0]["price"])
+                    ask = float(data["asks"][0]["price"])
+                    mid = (bid + ask) / 2
+                    self.queue.put((time.time(), mid))
+
+        except Exception:
+            print(f"Reconnect {self.symbol}...")
+            time.sleep(3)
     
     def _process(self):
         """Process incoming price data"""
