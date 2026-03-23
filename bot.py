@@ -486,70 +486,63 @@ class TradingEngine:
         self.symbol = symbol
         self.queue = queue.Queue()
         
-        # Multi-timeframe candle builders
-        self.m1_builder = CandleBuilder(60)      # 1 minute
-        self.m5_builder = CandleBuilder(300)     # 5 minutes
-        self.m15_builder = CandleBuilder(900)    # 15 minutes
+        self.m1_builder = CandleBuilder(60)
+        self.m5_builder = CandleBuilder(300)
+        self.m15_builder = CandleBuilder(900)
         
-        # Candle history
         self.m1_candles: List[Candle] = []
         self.m5_candles: List[Candle] = []
         self.m15_candles: List[Candle] = []
         
-        # RSI history for divergence
         self.rsi_history: List[float] = []
         
-        # Signal cooldown
         self.last_signal_time = 0
-        self.signal_cooldown = 300  # 5 minutes between signals
+        self.signal_cooldown = 300
         
-        # Current price
         self.current_price = 0
         
     def start(self):
         threading.Thread(target=self._stream, daemon=True).start()
         threading.Thread(target=self._process, daemon=True).start()
     
-def _stream(self):
-    url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
-    headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
-    params = {"instruments": self.symbol}
-    
-    while True:
-        try:
-            r = requests.get(url, headers=headers, params=params, stream=True, timeout=30)
+    def _stream(self):
+        url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
+        headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
+        params = {"instruments": self.symbol}
+        
+        while True:
+            try:
+                r = requests.get(url, headers=headers, params=params, stream=True, timeout=30)
 
-            for line in r.iter_lines():
-                if not line:
-                    continue
-
-                try:
-                    decoded = line.decode().strip()
-                    if not decoded:
+                for line in r.iter_lines():
+                    if not line:
                         continue
 
-                    data = json.loads(decoded)
-                except Exception:
-                    continue
+                    try:
+                        decoded = line.decode().strip()
+                        if not decoded:
+                            continue
 
-                if data.get("type") == "PRICE":
-                    bid = float(data["bids"][0]["price"])
-                    ask = float(data["asks"][0]["price"])
-                    mid = (bid + ask) / 2
-                    self.queue.put((time.time(), mid))
+                        data = json.loads(decoded)
+                    except Exception:
+                        continue
 
-        except Exception:
-            print(f"Reconnect {self.symbol}...")
-            time.sleep(3)
-    
+                    if data.get("type") == "PRICE":
+                        bid = float(data["bids"][0]["price"])
+                        ask = float(data["asks"][0]["price"])
+                        mid = (bid + ask) / 2
+                        self.queue.put((time.time(), mid))
+
+            except Exception:
+                print(f"Reconnect {self.symbol}...")
+                time.sleep(3)
+
     def _process(self):
-        """Process incoming price data"""
         while True:
             try:
                 ts, price = self.queue.get(timeout=5)
                 self.current_price = price
                 
-                # Update all timeframes
                 if self.m1_builder.tick(ts, price):
                     if self.m1_builder.completed:
                         self.m1_candles.append(self.m1_builder.completed)
@@ -565,7 +558,6 @@ def _stream(self):
                         self.m15_candles.append(self.m15_builder.completed)
                         self.m15_candles = self.m15_candles[-50:]
                 
-                # Update RSI history
                 if len(self.m1_candles) >= RSI_PERIOD + 1:
                     closes = [c.c for c in self.m1_candles]
                     r = rsi(closes)
@@ -576,8 +568,7 @@ def _stream(self):
             except queue.Empty:
                 continue
             except Exception:
-                print(f"Reconnect {self.symbol}...")
-                time.sleep(3)
+                print(f"Process error {self.symbol}")
     
     def analyze(self) -> Optional[Dict]:
         """Comprehensive market analysis"""
