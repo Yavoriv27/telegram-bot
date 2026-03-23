@@ -1,4 +1,4 @@
-import os
+ import os
 import json
 import time
 import math
@@ -519,17 +519,26 @@ class TradingEngine:
         while True:
             try:
                 r = requests.get(url, headers=headers, params=params, stream=True, timeout=30)
-                for line in r.iter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line.decode())
+        for line in r.iter_lines():
+            if not line:
+                continue
+
+       try:
+            decoded = line.decode().strip()
+            if not decoded:
+                continue
+
+        data = json.loads(decoded)
+    except Exception:
+        continue
                     if data.get("type") == "PRICE":
                         bid = float(data["bids"][0]["price"])
                         ask = float(data["asks"][0]["price"])
                         mid = (bid + ask) / 2
                         self.queue.put((time.time(), mid))
-            except Exception as e:
-                print(f"Stream error {self.symbol}: {e}")
+            except Exception:
+                print(f"Reconnect {self.symbol}...")
+                time.sleep(3)
                 time.sleep(5)
     
     def _process(self):
@@ -565,8 +574,9 @@ class TradingEngine:
                         
             except queue.Empty:
                 continue
-            except Exception as e:
-                print(f"Process error {self.symbol}: {e}")
+            except Exception:
+                print(f"Reconnect {self.symbol}...")
+                time.sleep(3)
     
     def analyze(self) -> Optional[Dict]:
         """Comprehensive market analysis"""
