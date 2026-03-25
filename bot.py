@@ -88,8 +88,8 @@ ATR_MIN_MULTIPLIER = 0.5
 ATR_MAX_MULTIPLIER = 2.5
 
 # Confluence Requirements
-MIN_CONFLUENCE_SCORE = 5  # Out of 6 indicators
-MIN_PROBABILITY = 0.74
+MIN_CONFLUENCE_SCORE = 4  # Out of 6 indicators
+MIN_PROBABILITY = 0.72
 
 # ============== MONEY MANAGEMENT ==============
 INITIAL_BALANCE = 3000
@@ -497,7 +497,7 @@ class TradingEngine:
         self.rsi_history: List[float] = []
         
         self.last_signal_time = 0
-        self.signal_cooldown = 300
+        self.signal_cooldown = 180
         
         self.current_price = 0
         
