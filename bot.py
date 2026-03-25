@@ -68,10 +68,10 @@ def pip_value(symbol):
 # ============== STRATEGY PARAMETERS ==============
 # RSI Settings
 RSI_PERIOD = 14
-RSI_OVERBOUGHT = 70
-RSI_OVERSOLD = 30
-RSI_STRONG_OB = 80
-RSI_STRONG_OS = 20
+RSI_OVERBOUGHT = 72
+RSI_OVERSOLD = 32
+RSI_STRONG_OB = 81
+RSI_STRONG_OS = 22
 
 # MACD Settings
 MACD_FAST = 12
@@ -88,14 +88,14 @@ ATR_MIN_MULTIPLIER = 0.5
 ATR_MAX_MULTIPLIER = 2.5
 
 # Confluence Requirements
-MIN_CONFLUENCE_SCORE = 4  # Out of 6 indicators
-MIN_PROBABILITY = 0.72
+MIN_CONFLUENCE_SCORE = 5  # Out of 6 indicators
+MIN_PROBABILITY = 0.74
 
 # ============== MONEY MANAGEMENT ==============
 INITIAL_BALANCE = 3000
 BALANCE = INITIAL_BALANCE
-RISK_PERCENT = 0.05  # 5% per trade (conservative)
-MAX_RISK_PERCENT = 0.10  # Max 10% on high-confidence trades
+RISK_PERCENT = 0.04  # 5% per trade (conservative)
+MAX_RISK_PERCENT = 0.9  # Max 10% on high-confidence trades
 PAYOUT = 0.80
 
 STATE = {
