@@ -506,10 +506,10 @@ class TradingEngine:
         threading.Thread(target=self._process, daemon=True).start()
     
     def _stream(self):
-        url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
-        headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
-        params = {"instruments": self.symbol}
-    
+    url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
+    headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
+    params = {"instruments": self.symbol}
+
     while True:
         try:
             r = requests.get(
