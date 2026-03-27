@@ -502,8 +502,8 @@ def detect_divergence(prices: List[float], rsi_values: List[float]) -> Optional[
             self.current_price = 0
         
         def start(self):
-        threading.Thread(target=self._stream, daemon=True).start()
-        threading.Thread(target=self._process, daemon=True).start()
+            threading.Thread(target=self._stream, daemon=True).start()
+            threading.Thread(target=self._process, daemon=True).start()
     
         def _stream(self):
             url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
