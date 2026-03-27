@@ -484,9 +484,61 @@ def detect_divergence(prices: List[float], rsi_values: List[float]) -> Optional[
 class TradingEngine:
     def __init__(self, symbol):
         self.symbol = symbol
+        self.queue = queue.Queue()
 
     def start(self):
-        pass
+        threading.Thread(target=self._stream, daemon=True).start()
+
+    def _stream(self):
+        url = f"https://stream-fxpractice.oanda.com/v3/accounts/{os.getenv('OANDA_ACCOUNT_ID')}/pricing/stream"
+        headers = {"Authorization": f"Bearer {os.getenv('OANDA_API_KEY')}"}
+        params = {"instruments": self.symbol}
+
+        while True:
+            try:
+                r = requests.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    stream=True
+                )
+
+                if r.status_code != 200:
+                    print(f"HTTP Error {r.status_code}")
+                    time.sleep(5)
+                    continue
+
+                last_tick = time.time()
+
+                for line in r.iter_lines():
+                    if line:
+                        last_tick = time.time()
+                    else:
+                        continue
+
+                    try:
+                        decoded = line.decode().strip()
+                        if not decoded:
+                            continue
+
+                        data = json.loads(decoded)
+                    except Exception:
+                        continue
+
+                    if data.get("type") == "PRICE":
+                        bid = float(data["bids"][0]["price"])
+                        ask = float(data["asks"][0]["price"])
+                        mid = (bid + ask) / 2
+                        self.queue.put((time.time(), mid))
+
+                    if time.time() - last_tick > 60:
+                        print(f"Stream stale → reconnect {self.symbol}")
+                        break
+
+            except Exception as e:
+                print(f"ERROR {self.symbol}: {e}")
+                print(f"Reconnect {self.symbol}...")
+                time.sleep(5)
 
 # ============== BOT SETUP ==============
 SYMBOLS = ["EUR_USD", "GBP_USD", "USD_JPY"]
