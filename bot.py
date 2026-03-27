@@ -483,23 +483,23 @@ def detect_divergence(prices: List[float], rsi_values: List[float]) -> Optional[
 # ============== TRADING ENGINE ==============
     class TradingEngine:
         def __init__(self, symbol: str):
-        self.symbol = symbol
-        self.queue = queue.Queue()
+            self.symbol = symbol
+            self.queue = queue.Queue()
         
-        self.m1_builder = CandleBuilder(60)
-        self.m5_builder = CandleBuilder(300)
-        self.m15_builder = CandleBuilder(900)
+            self.m1_builder = CandleBuilder(60)
+            self.m5_builder = CandleBuilder(300)
+            self.m15_builder = CandleBuilder(900)
         
-        self.m1_candles: List[Candle] = []
-        self.m5_candles: List[Candle] = []
-        self.m15_candles: List[Candle] = []
+            self.m1_candles: List[Candle] = []
+            self.m5_candles: List[Candle] = []
+            self.m15_candles: List[Candle] = []
         
-        self.rsi_history: List[float] = []
+            self.rsi_history: List[float] = []
         
-        self.last_signal_time = 0
-        self.signal_cooldown = 180
+            self.last_signal_time = 0
+            self.signal_cooldown = 180
         
-        self.current_price = 0
+            self.current_price = 0
         
         def start(self):
         threading.Thread(target=self._stream, daemon=True).start()
