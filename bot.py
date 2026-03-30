@@ -1,103 +1,61 @@
 import os
-import asyncio
-import time
 from datetime import datetime
-from collections import deque
 from dotenv import load_dotenv
-
-import yfinance as yf
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
+import oandapyV20
+from oandapyV20.endpoints import instruments
+
 load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OANDA_KEY = os.getenv("OANDA_API_KEY")
 
-PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]
+client = oandapyV20.API(access_token=OANDA_KEY)
 
-BALANCE = 1000
-WIN = 0
-LOSS = 0
-
-memory = {
-    "BUY": 1.0,
-    "SELL": 1.0
-}
+PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 
 # ================= DATA =================
-def get_price(pair):
-    df = yf.download(pair, period="1d", interval="1m", progress=False)
-    return df["Close"].iloc[-1]
+def get_data(pair):
+    params = {"granularity": "M1", "count": 50, "price": "M"}
 
-# ================= CANDLES =================
-class CandleBuilder:
-    def __init__(self):
-        self.m1 = deque(maxlen=100)
-        self.m5 = deque(maxlen=100)
-        self.last_min = None
-        self.current = None
+    r = instruments.InstrumentsCandles(instrument=pair, params=params)
+    client.request(r)
 
-    def update(self, price):
-        now = datetime.utcnow()
+    data = []
 
-        minute = now.minute
+    for c in r.response["candles"]:
+        if c["complete"]:
+            data.append(float(c["mid"]["c"]))
 
-        if self.last_min != minute:
-            if self.current:
-                self.m1.append(self.current)
-
-            self.current = {
-                "open": price,
-                "high": price,
-                "low": price,
-                "close": price
-            }
-            self.last_min = minute
-        else:
-            self.current["close"] = price
-            self.current["high"] = max(self.current["high"], price)
-            self.current["low"] = min(self.current["low"], price)
-
-        if len(self.m1) >= 5:
-            last5 = list(self.m1)[-5:]
-            m5 = {
-                "open": last5[0]["open"],
-                "high": max(x["high"] for x in last5),
-                "low": min(x["low"] for x in last5),
-                "close": last5[-1]["close"]
-            }
-            self.m5.append(m5)
-
-builder = {p: CandleBuilder() for p in PAIRS}
+    return data
 
 # ================= ANALYSIS =================
-def analyze(candles):
-    if len(candles) < 10:
+def analyze(prices):
+    if len(prices) < 10:
         return None
-
-    closes = [c["close"] for c in candles]
 
     buy = 0
     sell = 0
 
-    # simple momentum
-    if closes[-1] > closes[-2]:
+    # momentum
+    if prices[-1] > prices[-2]:
         buy += 1
     else:
         sell += 1
 
     # trend
-    if closes[-1] > sum(closes[-5:]) / 5:
+    if prices[-1] > sum(prices[-5:]) / 5:
         buy += 1
     else:
         sell += 1
 
-    # price action (3 candles)
-    last3 = candles[-3:]
-    if all(c["close"] > c["open"] for c in last3):
+    # price action
+    if prices[-1] > prices[-2] > prices[-3]:
         buy += 2
-    elif all(c["close"] < c["open"] for c in last3):
+    elif prices[-1] < prices[-2] < prices[-3]:
         sell += 2
 
     total = buy + sell
@@ -108,32 +66,22 @@ def analyze(candles):
     sell_score = sell / total * 100
 
     if buy_score > sell_score:
-        return "BUY", buy_score * memory["BUY"]
+        return "BUY", buy_score
     else:
-        return "SELL", sell_score * memory["SELL"]
+        return "SELL", sell_score
 
 # ================= SIGNAL =================
 def generate_signal():
     best = None
 
     for pair in PAIRS:
-        b = builder[pair]
+        prices = get_data(pair)
+        signal = analyze(prices)
 
-        if len(b.m1) < 10 or len(b.m5) < 5:
+        if not signal:
             continue
 
-        m1 = analyze(list(b.m1))
-        m5 = analyze(list(b.m5))
-
-        if not m1:
-            continue
-
-        direction, score = m1
-
-        if m5:
-            d5, s5 = m5
-            if d5 != direction:
-                continue
+        direction, score = signal
 
         if not best or score > best["score"]:
             best = {
@@ -144,29 +92,25 @@ def generate_signal():
 
     return best
 
-# ================= TELEGRAM =================
+# ================= UI =================
 def main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
+        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")]
     ])
 
 def result_kb():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅", callback_data="win"),
-            InlineKeyboardButton("❌", callback_data="loss")
+            InlineKeyboardButton("✅ WIN", callback_data="win"),
+            InlineKeyboardButton("❌ LOSS", callback_data="loss")
         ]
     ])
 
-AUTO = False
-
+# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 PRO BOT", reply_markup=main_kb())
+    await update.message.reply_text("🚀 OANDA BOT", reply_markup=main_kb())
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AUTO, BALANCE, WIN, LOSS
-
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
@@ -178,62 +122,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
-{ s['pair'] }
-{ s['direction'] }
+📊 {s['pair']}
+{ '🟢 BUY' if s['direction']=='BUY' else '🔴 SELL' }
 
-📊 {s['score']:.0f}%
-💰 {BALANCE}
+📈 {s['score']:.0f}%
+⏱ 2 хв
+🕒 {datetime.utcnow().strftime('%H:%M:%S')}
 """
         await q.message.reply_text(msg, reply_markup=result_kb())
 
-    elif q.data == "win":
-        WIN += 1
-        BALANCE += BALANCE * 0.1
-        memory["BUY"] += 0.05
-        memory["SELL"] += 0.05
-        await q.message.reply_text(f"✅ WIN | {BALANCE}", reply_markup=main_kb())
-
-    elif q.data == "loss":
-        LOSS += 1
-        BALANCE -= BALANCE * 0.1
-        memory["BUY"] *= 0.95
-        memory["SELL"] *= 0.95
-        await q.message.reply_text(f"❌ LOSS | {BALANCE}", reply_markup=main_kb())
-
-    elif q.data == "auto":
-        AUTO = not AUTO
-        await q.message.reply_text(f"AUTO: {AUTO}", reply_markup=main_kb())
-
-# ================= LOOP =================
-async def market_loop(app):
-    while True:
-        for p in PAIRS:
-            try:
-                price = get_price(p)
-                builder[p].update(price)
-            except:
-                pass
-
-        if AUTO:
-            s = generate_signal()
-            if s:
-                await app.bot.send_message(
-                    chat_id=os.getenv("CHAT_ID"),
-                    text=f"{s['pair']} {s['direction']} {s['score']:.0f}%"
-                )
-
-        await asyncio.sleep(10)
+    elif q.data in ["win", "loss"]:
+        await q.message.reply_text("Збережено", reply_markup=main_kb())
 
 # ================= MAIN =================
 def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CallbackQueryHandler(buttons))
 
-    print("🚀 PRO BOT STARTED")
-
-    app.create_task(market_loop(app))
+    print("🚀 OANDA BOT STARTED")
     app.run_polling()
 
 if __name__ == "__main__":
