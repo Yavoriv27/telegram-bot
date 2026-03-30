@@ -264,9 +264,9 @@ def main():
     app.add_handler(CallbackQueryHandler(btn))
 
     async def on_startup(app):
-    app.create_task(auto_loop(app))
+        app.create_task(auto_loop(app))
 
-app.post_init = on_startup
+    app.post_init = on_startup
 
     print("🚀 MAX BOT STARTED")
     app.run_polling()
