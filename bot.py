@@ -7,26 +7,37 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import oandapyV20
-from oandapyV20.endpoints import instruments
+from oandapyV20.endpoints import instruments, orders
 
 load_dotenv()
 
-# ================= CONFIG =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_KEY = os.getenv("OANDA_API_KEY")
+ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
+
+client = oandapyV20.API(access_token=OANDA_KEY)
 
 PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 
+BALANCE = 1000
 BET_PERCENT = 0.1
 
-# ================= STATE =================
-BALANCE = 1000
-WIN = 0
-LOSS = 0
-STREAK = 0
 AUTO = False
+REAL_TRADING = False  # ⚠️ ВКЛ тільки коли готовий
 
-client = oandapyV20.API(access_token=OANDA_KEY)
+LAST_SIGNAL = None
+
+NEWS_TIMES = ["15:30", "16:00", "17:00"]
+
+# ================= LOG =================
+def log_trade(text):
+    with open("trades.log", "a") as f:
+        f.write(f"{datetime.utcnow()} | {text}\n")
+
+# ================= NEWS FILTER =================
+def is_news_time():
+    now = datetime.utcnow().strftime("%H:%M")
+    return now in NEWS_TIMES
 
 # ================= DATA =================
 def get_prices(pair, tf="M1", count=50):
@@ -34,11 +45,7 @@ def get_prices(pair, tf="M1", count=50):
     r = instruments.InstrumentsCandles(instrument=pair, params=params)
     client.request(r)
 
-    data = []
-    for c in r.response["candles"]:
-        if c["complete"]:
-            data.append(float(c["mid"]["c"]))
-    return data
+    return [float(c["mid"]["c"]) for c in r.response["candles"] if c["complete"]]
 
 # ================= STRATEGY =================
 def analyze(prices):
@@ -48,19 +55,16 @@ def analyze(prices):
     buy = 0
     sell = 0
 
-    # momentum
     if prices[-1] > prices[-2]:
         buy += 1
     else:
         sell += 1
 
-    # trend
     if prices[-1] > sum(prices[-5:]) / 5:
         buy += 1
     else:
         sell += 1
 
-    # price action (3 candles)
     if prices[-1] > prices[-2] > prices[-3]:
         buy += 2
     elif prices[-1] < prices[-2] < prices[-3]:
@@ -70,16 +74,15 @@ def analyze(prices):
     if total == 0:
         return None
 
-    buy_score = buy / total * 100
-    sell_score = sell / total * 100
-
-    if buy_score > sell_score:
-        return "BUY", buy_score
+    if buy > sell:
+        return "BUY", (buy / total) * 100
     else:
-        return "SELL", sell_score
+        return "SELL", (sell / total) * 100
 
 # ================= SIGNAL =================
 def generate_signal():
+    global LAST_SIGNAL
+
     best = None
 
     for pair in PAIRS:
@@ -94,26 +97,47 @@ def generate_signal():
 
         direction, score = s1
 
-        # M5 filter
-        if s5:
-            d5, _ = s5
-            if d5 != direction:
-                continue
+        if s5 and s5[0] != direction:
+            continue
 
         if not best or score > best["score"]:
-            best = {
-                "pair": pair,
-                "direction": direction,
-                "score": score
-            }
+            best = {"pair": pair, "direction": direction, "score": score}
 
+    # анти-флуд
+    if best and LAST_SIGNAL == best:
+        return None
+
+    LAST_SIGNAL = best
     return best
+
+# ================= OANDA TRADE =================
+def place_trade(pair, direction):
+    if not REAL_TRADING:
+        return "SIMULATION"
+
+    units = 1000 if direction == "BUY" else -1000
+
+    data = {
+        "order": {
+            "units": str(units),
+            "instrument": pair,
+            "timeInForce": "FOK",
+            "type": "MARKET",
+            "positionFill": "DEFAULT"
+        }
+    }
+
+    r = orders.OrderCreate(ACCOUNT_ID, data=data)
+    client.request(r)
+
+    return "ORDER PLACED"
 
 # ================= UI =================
 def main_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто ON/OFF", callback_data="auto")]
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
+        [InlineKeyboardButton("💰 Trade ON/OFF", callback_data="trade")]
     ])
 
 def result_kb():
@@ -126,16 +150,20 @@ def result_kb():
 
 # ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 BOT READY", reply_markup=main_kb())
+    await update.message.reply_text("🚀 PRO BOT+", reply_markup=main_kb())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AUTO, BALANCE, WIN, LOSS, STREAK
+    global AUTO, BALANCE, REAL_TRADING
 
     q = update.callback_query
     await q.answer()
 
-    # ===== SIGNAL =====
     if q.data == "signal":
+
+        if is_news_time():
+            await q.message.reply_text("📰 Новини — пропускаємо")
+            return
+
         s = generate_signal()
 
         if not s:
@@ -144,55 +172,46 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         bet = BALANCE * BET_PERCENT
 
-        msg = f"""
-📊 {s['pair']}
-{'🟢 BUY' if s['direction']=='BUY' else '🔴 SELL'}
+        result = place_trade(s["pair"], s["direction"])
 
-📈 {s['score']:.0f}%
-💵 Ставка: {bet:.2f}
-💰 Баланс: {BALANCE:.2f}
-⏱ 2 хв
-🕒 {datetime.utcnow().strftime('%H:%M:%S')}
-"""
-        await q.message.reply_text(msg, reply_markup=result_kb())
+        log_trade(f"{s} | {result}")
 
-    # ===== WIN =====
+        await q.message.reply_text(
+            f"{s['pair']} {s['direction']} {s['score']:.0f}%\n💵 {bet:.2f}\n{result}",
+            reply_markup=result_kb()
+        )
+
     elif q.data == "win":
-        bet = BALANCE * BET_PERCENT
-        profit = bet * 0.8
-
+        profit = BALANCE * BET_PERCENT * 0.8
         BALANCE += profit
-        WIN += 1
-        STREAK = max(1, STREAK + 1)
+        log_trade("WIN")
 
-        await q.message.reply_text(f"✅ WIN\n💰 {BALANCE:.2f}", reply_markup=main_kb())
+        await q.message.reply_text(f"✅ {BALANCE:.2f}", reply_markup=main_kb())
 
-    # ===== LOSS =====
     elif q.data == "loss":
-        bet = BALANCE * BET_PERCENT
+        loss = BALANCE * BET_PERCENT
+        BALANCE -= loss
+        log_trade("LOSS")
 
-        BALANCE -= bet
-        LOSS += 1
-        STREAK = min(-1, STREAK - 1)
+        await q.message.reply_text(f"❌ {BALANCE:.2f}", reply_markup=main_kb())
 
-        await q.message.reply_text(f"❌ LOSS\n💰 {BALANCE:.2f}", reply_markup=main_kb())
-
-    # ===== AUTO =====
     elif q.data == "auto":
         AUTO = not AUTO
-        await q.message.reply_text(f"🤖 AUTO: {AUTO}", reply_markup=main_kb())
+        await q.message.reply_text(f"AUTO: {AUTO}", reply_markup=main_kb())
 
-# ================= AUTO LOOP =================
+    elif q.data == "trade":
+        REAL_TRADING = not REAL_TRADING
+        await q.message.reply_text(f"REAL TRADING: {REAL_TRADING}", reply_markup=main_kb())
+
+# ================= AUTO =================
 async def auto_loop(app):
-    global AUTO
-
     while True:
-        if AUTO:
+        if AUTO and not is_news_time():
             s = generate_signal()
             if s:
                 await app.bot.send_message(
                     chat_id=os.getenv("CHAT_ID"),
-                    text=f"{s['pair']} {'BUY' if s['direction']=='BUY' else 'SELL'} {s['score']:.0f}%"
+                    text=f"{s['pair']} {s['direction']} {s['score']:.0f}%"
                 )
         await asyncio.sleep(120)
 
@@ -205,7 +224,7 @@ def main():
 
     app.create_task(auto_loop(app))
 
-    print("🚀 BOT STARTED")
+    print("🚀 BOT PRO+ STARTED")
     app.run_polling()
 
 if __name__ == "__main__":
