@@ -1,6 +1,5 @@
 import os
 import asyncio
-import schedule
 import time
 from datetime import datetime
 from dotenv import load_dotenv
@@ -17,7 +16,6 @@ from telegram import Bot
 
 load_dotenv()
 
-# ================= CONFIG =================
 PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 
 MIN_M1_CONFLUENCE = 65
@@ -27,13 +25,11 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 OANDA_API_KEY = os.getenv("OANDA_API_KEY")
-ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
 
 bot = Bot(token=TOKEN)
 client = oandapyV20.API(access_token=OANDA_API_KEY)
 
 
-# ================= DATA =================
 def get_candles(pair, granularity, count=150):
     params = {"granularity": granularity, "count": count, "price": "M"}
     r = instruments.InstrumentsCandles(instrument=pair, params=params)
@@ -52,7 +48,6 @@ def get_candles(pair, granularity, count=150):
     return pd.DataFrame(data)
 
 
-# ================= ANALYSIS =================
 def analyze(df):
     close = df["close"]
     high = df["high"]
@@ -86,37 +81,31 @@ def analyze(df):
     buy = 0
     sell = 0
 
-    # EMA
     if last["ema8"] > last["ema21"] > last["ema50"]:
         buy += 1
     elif last["ema8"] < last["ema21"] < last["ema50"]:
         sell += 1
 
-    # MACD
     if last["macd"] > last["macd_signal"]:
         buy += 1
     else:
         sell += 1
 
-    # RSI
     if last["rsi"] < 30:
         buy += 1
     elif last["rsi"] > 70:
         sell += 1
 
-    # Stochastic
     if last["stoch_k"] < 20:
         buy += 1
     elif last["stoch_k"] > 80:
         sell += 1
 
-    # Bollinger
     if last["close"] <= last["bb_lower"]:
         buy += 1
     elif last["close"] >= last["bb_upper"]:
         sell += 1
 
-    # ADX тренд
     if last["adx"] > 25:
         if buy > sell:
             buy += 1
@@ -138,7 +127,6 @@ def analyze(df):
     return None
 
 
-# ================= SIGNAL =================
 def generate_signal(pair):
     m1 = get_candles(pair, "M1")
     m5 = get_candles(pair, "M5")
@@ -157,7 +145,6 @@ def generate_signal(pair):
     if score < MIN_M1_CONFLUENCE:
         return None
 
-    # фільтр M5
     if m5_signal:
         m5_dir, m5_score = m5_signal
         if m5_dir != direction and m5_score > MIN_M5_CONFIRM:
@@ -170,7 +157,6 @@ def generate_signal(pair):
     }
 
 
-# ================= SEND =================
 async def send_signal(signal):
     text = f"""
 🚀 SIGNAL
@@ -185,10 +171,7 @@ async def send_signal(signal):
     await bot.send_message(chat_id=CHAT_ID, text=text)
 
 
-# ================= MAIN =================
 async def run():
-    print("Checking market...")
-
     best = None
 
     for pair in PAIRS:
@@ -204,15 +187,9 @@ async def run():
         print("No signal")
 
 
-def job():
-    asyncio.run(run())
-
-
-# ================= START =================
-print("🚀 BOT STARTED (2-min strategy)")
-
-schedule.every(2).minutes.do(job)
+# 🚀 СТАРТ
+print("🚀 BOT STARTED")
 
 while True:
-    schedule.run_pending()
-    time.sleep(1)
+    asyncio.run(run())
+    time.sleep(120)
