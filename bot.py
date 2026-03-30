@@ -1,141 +1,138 @@
 import os
 import asyncio
+import time
 from datetime import datetime
+from collections import deque
 from dotenv import load_dotenv
 
-import pandas as pd
 import yfinance as yf
-
-from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volatility import BollingerBands
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 load_dotenv()
 
+TOKEN = os.getenv("BOT_TOKEN")
+
 PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"]
 
-MIN_M1_CONFLUENCE = 65
-MIN_M5_CONFIRM = 55
+BALANCE = 1000
+WIN = 0
+LOSS = 0
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+memory = {
+    "BUY": 1.0,
+    "SELL": 1.0
+}
 
 # ================= DATA =================
-def get_data(pair, interval):
-    try:
-        df = yf.download(pair, period="1d", interval=interval, progress=False)
-        df.dropna(inplace=True)
-        return df
-    except:
-        return pd.DataFrame()
+def get_price(pair):
+    df = yf.download(pair, period="1d", interval="1m", progress=False)
+    return df["Close"].iloc[-1]
+
+# ================= CANDLES =================
+class CandleBuilder:
+    def __init__(self):
+        self.m1 = deque(maxlen=100)
+        self.m5 = deque(maxlen=100)
+        self.last_min = None
+        self.current = None
+
+    def update(self, price):
+        now = datetime.utcnow()
+
+        minute = now.minute
+
+        if self.last_min != minute:
+            if self.current:
+                self.m1.append(self.current)
+
+            self.current = {
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price
+            }
+            self.last_min = minute
+        else:
+            self.current["close"] = price
+            self.current["high"] = max(self.current["high"], price)
+            self.current["low"] = min(self.current["low"], price)
+
+        if len(self.m1) >= 5:
+            last5 = list(self.m1)[-5:]
+            m5 = {
+                "open": last5[0]["open"],
+                "high": max(x["high"] for x in last5),
+                "low": min(x["low"] for x in last5),
+                "close": last5[-1]["close"]
+            }
+            self.m5.append(m5)
+
+builder = {p: CandleBuilder() for p in PAIRS}
 
 # ================= ANALYSIS =================
-def analyze(df):
-    if len(df) < 50:
+def analyze(candles):
+    if len(candles) < 10:
         return None
 
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
-
-    df["ema8"] = EMAIndicator(close, 8).ema_indicator()
-    df["ema21"] = EMAIndicator(close, 21).ema_indicator()
-    df["ema50"] = EMAIndicator(close, 50).ema_indicator()
-
-    macd = MACD(close)
-    df["macd"] = macd.macd()
-    df["macd_signal"] = macd.macd_signal()
-
-    df["rsi"] = RSIIndicator(close).rsi()
-
-    stoch = StochasticOscillator(high, low, close)
-    df["stoch_k"] = stoch.stoch()
-    df["stoch_d"] = stoch.stoch_signal()
-
-    bb = BollingerBands(close)
-    df["bb_upper"] = bb.bollinger_hband()
-    df["bb_lower"] = bb.bollinger_lband()
-
-    adx = ADXIndicator(high, low, close)
-    df["adx"] = adx.adx()
-
-    last = df.iloc[-1]
+    closes = [c["close"] for c in candles]
 
     buy = 0
     sell = 0
 
-    if last["ema8"] > last["ema21"] > last["ema50"]:
-        buy += 1
-    elif last["ema8"] < last["ema21"] < last["ema50"]:
-        sell += 1
-
-    if last["macd"] > last["macd_signal"]:
+    # simple momentum
+    if closes[-1] > closes[-2]:
         buy += 1
     else:
         sell += 1
 
-    if last["rsi"] < 30:
+    # trend
+    if closes[-1] > sum(closes[-5:]) / 5:
         buy += 1
-    elif last["rsi"] > 70:
+    else:
         sell += 1
 
-    if last["stoch_k"] < 20:
-        buy += 1
-    elif last["stoch_k"] > 80:
-        sell += 1
-
-    if last["Close"] <= last["bb_lower"]:
-        buy += 1
-    elif last["Close"] >= last["bb_upper"]:
-        sell += 1
-
-    if last["adx"] > 20:
-        if buy > sell:
-            buy += 1
-        else:
-            sell += 1
+    # price action (3 candles)
+    last3 = candles[-3:]
+    if all(c["close"] > c["open"] for c in last3):
+        buy += 2
+    elif all(c["close"] < c["open"] for c in last3):
+        sell += 2
 
     total = buy + sell
     if total == 0:
         return None
 
-    buy_score = (buy / total) * 100
-    sell_score = (sell / total) * 100
+    buy_score = buy / total * 100
+    sell_score = sell / total * 100
 
     if buy_score > sell_score:
-        return "BUY", buy_score
-    elif sell_score > buy_score:
-        return "SELL", sell_score
-
-    return None
+        return "BUY", buy_score * memory["BUY"]
+    else:
+        return "SELL", sell_score * memory["SELL"]
 
 # ================= SIGNAL =================
 def generate_signal():
     best = None
 
     for pair in PAIRS:
-        m1 = get_data(pair, "1m")
-        m5 = get_data(pair, "5m")
+        b = builder[pair]
 
-        if m1.empty or m5.empty:
+        if len(b.m1) < 10 or len(b.m5) < 5:
             continue
 
-        s1 = analyze(m1)
-        s5 = analyze(m5)
+        m1 = analyze(list(b.m1))
+        m5 = analyze(list(b.m5))
 
-        if not s1:
+        if not m1:
             continue
 
-        direction, score = s1
+        direction, score = m1
 
-        if score < MIN_M1_CONFLUENCE:
-            continue
-
-        if s5:
-            d5, s5_score = s5
-            if d5 != direction and s5_score > MIN_M5_CONFIRM:
+        if m5:
+            d5, s5 = m5
+            if d5 != direction:
                 continue
 
         if not best or score > best["score"]:
@@ -147,57 +144,96 @@ def generate_signal():
 
     return best
 
-# ================= HANDLERS =================
-def main_keyboard():
+# ================= TELEGRAM =================
+def main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")]
+        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
     ])
 
-def result_keyboard():
+def result_kb():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ WIN", callback_data="win"),
-            InlineKeyboardButton("❌ LOSS", callback_data="loss")
+            InlineKeyboardButton("✅", callback_data="win"),
+            InlineKeyboardButton("❌", callback_data="loss")
         ]
     ])
 
+AUTO = False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Бот запущений", reply_markup=main_keyboard())
+    await update.message.reply_text("🚀 PRO BOT", reply_markup=main_kb())
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global AUTO, BALANCE, WIN, LOSS
 
-    if query.data == "signal":
-        signal = generate_signal()
+    q = update.callback_query
+    await q.answer()
 
-        if not signal:
-            await query.message.reply_text("❌ Немає сигналу", reply_markup=main_keyboard())
+    if q.data == "signal":
+        s = generate_signal()
+
+        if not s:
+            await q.message.reply_text("❌ Немає сигналу", reply_markup=main_kb())
             return
 
-        text = f"""
-🚀 SIGNAL
+        msg = f"""
+{ s['pair'] }
+{ s['direction'] }
 
-📊 {signal['pair'].replace('=X','')}
-{'🟢 BUY' if signal['direction']=='BUY' else '🔴 SELL'}
-
-⏱ 2 хв
-📊 {signal['score']:.0f}%
-🕒 {datetime.utcnow().strftime('%H:%M:%S')}
+📊 {s['score']:.0f}%
+💰 {BALANCE}
 """
-        await query.message.reply_text(text, reply_markup=result_keyboard())
+        await q.message.reply_text(msg, reply_markup=result_kb())
 
-    elif query.data in ["win", "loss"]:
-        await query.message.reply_text("Результат збережено", reply_markup=main_keyboard())
+    elif q.data == "win":
+        WIN += 1
+        BALANCE += BALANCE * 0.1
+        memory["BUY"] += 0.05
+        memory["SELL"] += 0.05
+        await q.message.reply_text(f"✅ WIN | {BALANCE}", reply_markup=main_kb())
+
+    elif q.data == "loss":
+        LOSS += 1
+        BALANCE -= BALANCE * 0.1
+        memory["BUY"] *= 0.95
+        memory["SELL"] *= 0.95
+        await q.message.reply_text(f"❌ LOSS | {BALANCE}", reply_markup=main_kb())
+
+    elif q.data == "auto":
+        AUTO = not AUTO
+        await q.message.reply_text(f"AUTO: {AUTO}", reply_markup=main_kb())
+
+# ================= LOOP =================
+async def market_loop(app):
+    while True:
+        for p in PAIRS:
+            try:
+                price = get_price(p)
+                builder[p].update(price)
+            except:
+                pass
+
+        if AUTO:
+            s = generate_signal()
+            if s:
+                await app.bot.send_message(
+                    chat_id=os.getenv("CHAT_ID"),
+                    text=f"{s['pair']} {s['direction']} {s['score']:.0f}%"
+                )
+
+        await asyncio.sleep(10)
 
 # ================= MAIN =================
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(button))
 
-    print("🚀 BOT STARTED")
+    print("🚀 PRO BOT STARTED")
+
+    app.create_task(market_loop(app))
     app.run_polling()
 
 if __name__ == "__main__":
