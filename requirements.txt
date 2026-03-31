@@ -1,5 +1,5 @@
 oandapyV20
 six
-python-telegram-bot==20.7
+python-telegram-bot[job-queue]==20.7
 python-dotenv
 requests
