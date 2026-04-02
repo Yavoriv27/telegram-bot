@@ -254,9 +254,12 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not s:
             return
 
-        msg = f"🏆 {s['pair']} {'BUY' if s['dir']=='BUY' else 'SELL'} {s['prob']}%"
-        📊 {s['pair']}
+        msg = f"""
+🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
+
+📊 Ймовірність: {s['prob']}%
+"""
 
 📊 Ймовірність: {s['prob']}%
 📈 Сила: {s['score']}
