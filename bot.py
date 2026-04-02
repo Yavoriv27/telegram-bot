@@ -2,7 +2,6 @@ import os
 import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
-import numpy as np
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -21,10 +20,6 @@ PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 AUTO = True
 
 CHAT_IDS = set()
-
-wins = 0
-losses = 0
-total = 0
 
 MIN_PROB = 78
 MIN_SCORE = 8
@@ -63,10 +58,19 @@ def analyze_pair(pair):
     m5 = get_candles(pair, "M5")
     m15 = get_candles(pair, "M15")
 
-    trend = "BUY" if ema(m5,20) > ema(m5,50) and ema(m15,20) > ema(m15,50) else "SELL"
+    ema20_5 = ema(m5,20)
+    ema50_5 = ema(m5,50)
+    ema20_15 = ema(m15,20)
+    ema50_15 = ema(m15,50)
 
-    r = rsi(m1)
-    m = macd(m1)
+    trend = "BUY" if ema20_5 > ema50_5 and ema20_15 > ema50_15 else "SELL"
+
+    # сила тренду
+    trend_strength = abs(ema20_5 - ema50_5) + abs(ema20_15 - ema50_15)
+    trend_strength = round(trend_strength * 10000, 2)
+
+    r = round(rsi(m1), 2)
+    m = round(macd(m1), 5)
 
     score = 0
 
@@ -78,39 +82,50 @@ def analyze_pair(pair):
         if m < 0: score += 4
 
     if score < MIN_SCORE:
-        return None
+        return None, "Слабкий сигнал", None
 
     prob = min(60 + score*5, 95)
 
     if prob < MIN_PROB:
-        return None
+        return None, "Низька ймовірність", None
 
-    return {"pair": pair, "dir": trend, "prob": prob, "score": score}
+    return {
+        "pair": pair,
+        "dir": trend,
+        "prob": prob,
+        "score": score,
+        "rsi": r,
+        "macd": m,
+        "trend_strength": trend_strength
+    }, None, None
 
 
 def generate_signal():
     best = None
+    reason = ""
 
     for pair in PAIRS:
         try:
-            s = analyze_pair(pair)
+            s, r, _ = analyze_pair(pair)
         except:
             continue
 
         if s:
             if not best or s['prob'] > best['prob']:
                 best = s
+        else:
+            reason = r
 
     if not best:
-        return None
+        return None, reason if reason else "Нема умов"
 
     sec = datetime.now().second
     entry = 60 - sec
 
     if entry > 25:
-        return None
+        return None, "Не ідеальний момент входу"
 
-    return best | {"entry": entry}
+    return best | {"entry": entry}, None
 
 
 def kb():
@@ -132,12 +147,13 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "signal":
-        s = generate_signal()
+        s, reason = generate_signal()
 
         if not s:
+            await q.message.reply_text(f"❌ Нема сигналу\nПричина: {reason}")
             return
 
-        msg = f"📊 {s['pair']}\n{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}\n📊 {s['prob']}%\n⏱ {s['entry']} сек"
+        msg = f"📊 {s['pair']}\n{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}\n\n📊 Ймовірність: {s['prob']}%\n📈 Сила: {s['score']}\n\n📉 RSI: {s['rsi']}\n📊 MACD: {s['macd']}\n💪 Тренд: {s['trend_strength']}\n\n⏱ Вхід через: {s['entry']} сек"
 
         await q.message.reply_text(msg)
 
@@ -152,12 +168,12 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     if not AUTO:
         return
 
-    s = generate_signal()
+    s, reason = generate_signal()
 
     if not s:
-        return
-
-    msg = f"🏆 {s['pair']} {'BUY' if s['dir']=='BUY' else 'SELL'} {s['prob']}%"
+        msg = f"❌ Нема сигналу\nПричина: {reason}"
+    else:
+        msg = f"🏆 {s['pair']} {'BUY' if s['dir']=='BUY' else 'SELL'} {s['prob']}%\nRSI: {s['rsi']} | MACD: {s['macd']}"
 
     for chat_id in CHAT_IDS:
         try:
