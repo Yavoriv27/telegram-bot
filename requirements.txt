@@ -1,4 +1,5 @@
 numpy
+requests
 python-telegram-bot
 oandapyV20
 python-dotenv
