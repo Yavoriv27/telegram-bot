@@ -252,11 +252,10 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s, reason = generate_signal()
 
         if not s:
-            await q.message.reply_text(f"❌ Нема сигналу\nПричина: {reason}")
             return
 
-        msg = f"""
-📊 {s['pair']}
+        msg = f"🏆 {s['pair']} {'BUY' if s['dir']=='BUY' else 'SELL'} {s['prob']}%"
+        📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
 📊 Ймовірність: {s['prob']}%
@@ -303,7 +302,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(btn))
 
-    app.job_queue.run_repeating(auto_job, interval=300, first=10)
+    app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
     print("🚀 FINAL PRO BOT STARTED")
     app.run_polling()
