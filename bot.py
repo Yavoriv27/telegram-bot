@@ -224,12 +224,13 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "signal":
-        s = generate_signal()
+    s = generate_signal()
 
-        if not s:
-            return
+    if not s:
+        await q.message.reply_text("❌ Нема сигналу\nПричина: слабкий ринок або нема підтвердження")
+        return
 
-        msg = f"""
+    msg = f"""
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
@@ -243,6 +244,8 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ⏱ Вхід через: {s['entry']} сек
 """
+
+    await q.message.reply_text(msg)
 
         await q.message.reply_text(msg)
 
