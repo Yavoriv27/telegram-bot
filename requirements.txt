@@ -1,6 +1,6 @@
 numpy
 requests
 six
-python-telegram-bot
+python-telegram-bot[job-queue]
 oandapyV20
 python-dotenv
