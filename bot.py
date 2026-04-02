@@ -151,20 +151,20 @@ def analyze_pair(pair):
     if pat == trend:
         score += 3
     else:
-        return None
+        return None, "Нема патерну"
 
     if pa == trend:
         score += 2
     else:
-        return None
+        return None, "Price Action не підтверджує"
 
     if score < MIN_SCORE:
-        return None
+        return None, "Слабкий сигнал"
 
     prob = min(60 + score*4, 95)
 
     if prob < MIN_PROB:
-        return None
+        return None, "Низька ймовірність"
 
     return {
         "pair": pair,
@@ -175,33 +175,36 @@ def analyze_pair(pair):
         "macd": m,
         "trend_strength": round(trend_strength,2),
         "pattern": pat
-    }
+    }, None
 
 
 # ================= SIGNAL =================
 def generate_signal():
     best = None
+    reason = ""
 
     for pair in PAIRS:
         try:
-            s = analyze_pair(pair)
+            s, r = analyze_pair(pair)
         except:
             continue
 
         if s:
             if not best or s["prob"] > best["prob"]:
                 best = s
+        else:
+            reason = r
 
     if not best:
-        return None
+        return None, reason
 
     sec = datetime.now().second
     entry = 60 - sec
 
     if entry > 25:
-        return None
+        return None, "Не ідеальний момент входу"
 
-    return best | {"entry": entry}
+    return best | {"entry": entry}, None
 
 
 # ================= UI =================
@@ -224,13 +227,13 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "signal":
-    s = generate_signal()
+        s, reason = generate_signal()
 
-    if not s:
-        await q.message.reply_text("❌ Нема сигналу\nПричина: слабкий ринок або нема підтвердження")
-        return
+        if not s:
+            await q.message.reply_text(f"❌ Нема сигналу\nПричина: {reason}")
+            return
 
-    msg = f"""
+        msg = f"""
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
@@ -245,10 +248,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⏱ Вхід через: {s['entry']} сек
 """
 
-    await q.message.reply_text(msg)
-
         await q.message.reply_text(msg)
-
 
     elif q.data == "auto":
         AUTO = not AUTO
@@ -261,7 +261,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     if not AUTO:
         return
 
-    s = generate_signal()
+    s, _ = generate_signal()
 
     if not s:
         return
