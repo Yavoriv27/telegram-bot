@@ -2,7 +2,8 @@ import os
 import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
-import requests
+import numpy as np
+import json
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -15,144 +16,153 @@ load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 OANDA_KEY = os.getenv("OANDA_API_KEY")
-NEWS_KEY = os.getenv("NEWS_API_KEY")
 
 client = oandapyV20.API(access_token=OANDA_KEY)
 
 PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
-AUTO = False
+AUTO = True
 
-# ================= NEWS =================
-def check_news():
-    try:
-        url = f"https://newsapi.org/v2/everything?q=forex OR usd OR eur&apiKey={NEWS_KEY}"
-        r = requests.get(url, timeout=5).json()
+balance = 100
+wins = 0
+losses = 0
+total = 0
+loss_streak = 0
+win_streak = 0
 
-        for a in r.get("articles", [])[:5]:
-            t = a["title"].lower()
-            if any(x in t for x in ["fed", "cpi", "rate", "inflation", "nfp", "ecb"]):
-                return True
-    except:
-        pass
-    return False
+history = []
 
-# ================= SESSION =================
-def is_market_time():
-    h = datetime.utcnow().hour
-    return (8 <= h <= 11) or (13 <= h <= 17)
+MIN_PROB = 78
+MIN_SCORE = 8
 
-# ================= DATA =================
-def get_candles(pair, tf="M1", count=50):
+
+def get_candles(pair, tf, count=150):
     params = {"granularity": tf, "count": count, "price": "M"}
     r = instruments.InstrumentsCandles(instrument=pair, params=params)
     client.request(r)
-
-    candles = []
+    closes, full = [], []
     for c in r.response["candles"]:
         if c["complete"]:
-            candles.append({
-                "open": float(c["mid"]["o"]),
-                "close": float(c["mid"]["c"]),
-                "high": float(c["mid"]["h"]),
-                "low": float(c["mid"]["l"])
-            })
-    return candles
+            o = float(c["mid"]["o"])
+            cl = float(c["mid"]["c"])
+            h = float(c["mid"]["h"])
+            l = float(c["mid"]["l"])
+            closes.append(cl)
+            full.append({"o": o, "c": cl, "h": h, "l": l})
+    return closes, full
 
-# ================= STRATEGY =================
-def analyze(pair):
-    m5 = get_candles(pair, "M5", 30)
-    m1 = get_candles(pair, "M1", 30)
 
-    if len(m5) < 10 or len(m1) < 10:
-        return None
+def ema(d, p): return np.mean(d[-p:])
 
-    closes_m5 = [c["close"] for c in m5]
-    closes_m1 = [c["close"] for c in m1]
 
-    # TREND
-    ema_fast = sum(closes_m5[-5:]) / 5
-    ema_slow = sum(closes_m5[-20:]) / 20
+def rsi(d, p=14):
+    g, l = [], []
+    for i in range(1, len(d)):
+        diff = d[i] - d[i-1]
+        if diff > 0: g.append(diff)
+        else: l.append(abs(diff))
+    ag = np.mean(g[-p:]) if g else 0.0001
+    al = np.mean(l[-p:]) if l else 0.0001
+    return 100 - (100 / (1 + ag/al))
 
-    if abs(ema_fast - ema_slow) < 0.00005:
-        return None
 
-    trend = "BUY" if ema_fast > ema_slow else "SELL"
+def macd(d): return ema(d, 12) - ema(d, 26)
 
-    # LEVEL
-    support = min(closes_m1[-20:])
-    resistance = max(closes_m1[-20:])
-    price = closes_m1[-1]
 
-    near_support = abs(price - support) < (resistance - support) * 0.25
-    near_resistance = abs(price - resistance) < (resistance - support) * 0.25
+def analyze_pair(pair):
+    m1, _ = get_candles(pair, "M1")
+    m5, _ = get_candles(pair, "M5")
+    m15, _ = get_candles(pair, "M15")
 
-    # PULLBACK
-    last3 = closes_m1[-3:]
-    pullback_buy = last3[0] > last3[1] > last3[2]
-    pullback_sell = last3[0] < last3[1] < last3[2]
+    trend = "BUY" if ema(m5,20) > ema(m5,50) and ema(m15,20) > ema(m15,50) else "SELL"
 
-    # TRIGGER
-    last2 = m1[-2:]
-    bullish = last2[0]["close"] > last2[0]["open"] and last2[1]["close"] > last2[1]["open"]
-    bearish = last2[0]["close"] < last2[0]["open"] and last2[1]["close"] < last2[1]["open"]
+    r = rsi(m1)
+    m = macd(m1)
 
     score = 0
 
     if trend == "BUY":
-        score += 2
+        if r < 35: score += 3
+        if m > 0: score += 3
     else:
-        score += 2
+        if r > 65: score += 3
+        if m < 0: score += 3
 
-    if near_support or near_resistance:
-        score += 2
+    if score < MIN_SCORE:
+        return None
 
-    if bullish or bearish:
-        score += 2
+    prob = min(60 + score*5, 95)
 
-    if trend == "BUY" and near_support and pullback_buy and bullish:
-        return {"pair": pair, "direction": "BUY", "score": score,
-                "reason": "Trend ↑ + Pullback ↓ + Support + Trigger"}
+    if prob < MIN_PROB:
+        return None
 
-    if trend == "SELL" and near_resistance and pullback_sell and bearish:
-        return {"pair": pair, "direction": "SELL", "score": score,
-                "reason": "Trend ↓ + Pullback ↑ + Resistance + Trigger"}
+    return {"pair": pair, "dir": trend, "prob": prob, "score": score}
 
-    return None
 
-# ================= SIGNAL =================
+def detect_bad_market():
+    if len(history) < 5:
+        return False
+    last = history[-5:]
+    losses_count = sum(1 for x in last if x == 0)
+    return losses_count >= 4
+
+
+def money_management(prob):
+    global loss_streak, win_streak, balance
+
+    if loss_streak >= 3:
+        return 3
+    if win_streak >= 3:
+        return 15
+    if prob > 85:
+        return 10
+    return 7
+
+
 def generate_signal():
-    if check_news():
-        return None, "📰 News filter"
-
-    if not is_market_time():
-        return None, "⏰ Not active session"
+    if detect_bad_market():
+        return None, "⛔ Ринок поганий (аналіз історії)"
 
     best = None
 
     for pair in PAIRS:
-        s = analyze(pair)
+        try:
+            s = analyze_pair(pair)
+        except:
+            continue
+
         if s:
-            if not best or s["score"] > best["score"]:
+            if not best or s['prob'] > best['prob']:
                 best = s
 
     if not best:
-        return None, "❌ No setup"
+        return None, "❌ Нема сигналу"
 
-    return best, None
+    sec = datetime.now().second
+    entry = 60 - sec
 
-# ================= UI =================
-def main_kb():
+    if entry > 25:
+        return None, "⏳ Чекаємо ідеальний момент"
+
+    stake = money_management(best['prob'])
+
+    return best | {"entry": entry, "stake": stake}, None
+
+
+def kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="stat")],
+        [InlineKeyboardButton("✅ Плюс", callback_data="win"), InlineKeyboardButton("❌ Мінус", callback_data="loss")]
     ])
 
-# ================= HANDLERS =================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 MAX TRADER BOT", reply_markup=main_kb())
+    await update.message.reply_text("🚀 FINAL AI BOT", reply_markup=kb())
+
 
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AUTO
+    global AUTO, wins, losses, total, loss_streak, win_streak
 
     q = update.callback_query
     await q.answer()
@@ -161,53 +171,75 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s, reason = generate_signal()
 
         if not s:
-            await q.message.reply_text(reason, reply_markup=main_kb())
+            await q.message.reply_text(reason, reply_markup=kb())
             return
-
-        sec = datetime.utcnow().second
-        entry_in = 60 - sec
 
         msg = f"""
 📊 {s['pair']}
-{'🟢 BUY' if s['direction']=='BUY' else '🔴 SELL'}
+{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
-📌 {s['reason']}
+📊 Ймовірність: {s['prob']}%
+📈 Сила: {s['score']}
 
-⏱ Вхід через: {entry_in} сек
-🕒 {datetime.utcnow().strftime('%H:%M:%S')}
+💵 Ставка: {s['stake']}%
+⏱ Вхід через: {s['entry']} сек
+
+🏆 FINAL SIGNAL
 """
-        await q.message.reply_text(msg, reply_markup=main_kb())
+
+        await q.message.reply_text(msg, reply_markup=kb())
 
     elif q.data == "auto":
         AUTO = not AUTO
-        await q.message.reply_text(f"AUTO: {AUTO}", reply_markup=main_kb())
+        await q.message.reply_text(f"AUTO: {AUTO}", reply_markup=kb())
 
-# ================= AUTO =================
+    elif q.data == "stat":
+        winrate = (wins / total * 100) if total > 0 else 0
+        await q.message.reply_text(f"📊 {total} | ✅ {wins} | ❌ {losses}\nWinrate: {round(winrate,1)}%", reply_markup=kb())
+
+    elif q.data == "win":
+        wins += 1
+        total += 1
+        win_streak += 1
+        loss_streak = 0
+        history.append(1)
+        await q.message.reply_text("+ записано", reply_markup=kb())
+
+    elif q.data == "loss":
+        losses += 1
+        total += 1
+        loss_streak += 1
+        win_streak = 0
+        history.append(0)
+        await q.message.reply_text("- записано", reply_markup=kb())
+
+
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     global AUTO
 
     if not AUTO:
         return
 
-    s, _ = generate_signal()
+    s, reason = generate_signal()
 
-    if s:
-        await context.bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"{s['pair']} {s['direction']} | {s['reason']}"
-        )
+    if not s:
+        await context.bot.send_message(chat_id=CHAT_ID, text=reason)
+        return
 
-# ================= MAIN =================
+    await context.bot.send_message(chat_id=CHAT_ID, text=f"🏆 {s['pair']} {s['dir']} {s['prob']}% FINAL")
+
+
 def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(btn))
 
-    app.job_queue.run_repeating(auto_job, interval=120, first=10)
+    app.job_queue.run_repeating(auto_job, interval=300, first=10)
 
-    print("🚀 MAX TRADER BOT STARTED")
+    print("🚀 FINAL AI STARTED")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
