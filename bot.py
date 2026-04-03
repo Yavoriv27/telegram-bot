@@ -21,8 +21,8 @@ PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 AUTO = True
 CHAT_IDS = set()
 
-MIN_PROB = 80
-MIN_SCORE = 9
+MIN_PROB = 75
+MIN_SCORE = 7
 
 
 # ================= DATA =================
@@ -122,7 +122,6 @@ def analyze_pair(pair):
     m15, _ = get_candles(pair, "M15")
 
     trend = "BUY" if ema(m5,20) > ema(m5,50) and ema(m15,20) > ema(m15,50) else "SELL"
-
     trend_strength = abs(ema(m5,20) - ema(m5,50)) * 10000
 
     r = round(rsi(m1), 2)
@@ -139,6 +138,7 @@ def analyze_pair(pair):
 
     score = 0
 
+    # базові індикатори
     if trend == "BUY":
         if r < 35: score += 2
         if m > 0: score += 2
@@ -148,15 +148,13 @@ def analyze_pair(pair):
         if m < 0: score += 2
         if near_resistance: score += 2
 
+    # патерн (НЕ блокує)
     if pat == trend:
         score += 3
-    else:
-        return None, "Нема патерну"
 
+    # price action (НЕ блокує)
     if pa == trend:
         score += 2
-    else:
-        return None, "Price Action не підтверджує"
 
     if score < MIN_SCORE:
         return None, "Слабкий сигнал"
@@ -166,6 +164,9 @@ def analyze_pair(pair):
     if prob < MIN_PROB:
         return None, "Низька ймовірність"
 
+    # сила сигналу
+    strength = "🔥 СИЛЬНИЙ" if score >= 9 else "⚠️ СЕРЕДНІЙ"
+
     return {
         "pair": pair,
         "dir": trend,
@@ -174,7 +175,8 @@ def analyze_pair(pair):
         "rsi": r,
         "macd": m,
         "trend_strength": round(trend_strength,2),
-        "pattern": pat
+        "pattern": pat if pat else "нема",
+        "strength": strength
     }, None
 
 
@@ -234,6 +236,8 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
+{s['strength']}
+
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
@@ -249,6 +253,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
 
         await q.message.reply_text(msg)
+
 
     elif q.data == "auto":
         AUTO = not AUTO
@@ -267,6 +272,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = f"""
+{s['strength']}
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
