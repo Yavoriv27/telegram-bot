@@ -24,6 +24,9 @@ CHAT_IDS = set()
 MIN_PROB = 75
 MIN_SCORE = 7
 
+LAST_SIGNAL_TIME = {}
+COOLDOWN = 600  # 10 хв
+
 
 # ================= DATA =================
 def get_candles(pair, tf, count=150):
@@ -138,7 +141,6 @@ def analyze_pair(pair):
 
     score = 0
 
-    # базові індикатори
     if trend == "BUY":
         if r < 35: score += 2
         if m > 0: score += 2
@@ -148,11 +150,9 @@ def analyze_pair(pair):
         if m < 0: score += 2
         if near_resistance: score += 2
 
-    # патерн (НЕ блокує)
     if pat == trend:
         score += 3
 
-    # price action (НЕ блокує)
     if pa == trend:
         score += 2
 
@@ -164,7 +164,6 @@ def analyze_pair(pair):
     if prob < MIN_PROB:
         return None, "Низька ймовірність"
 
-    # сила сигналу
     strength = "🔥 СИЛЬНИЙ" if score >= 9 else "⚠️ СЕРЕДНІЙ"
 
     return {
@@ -184,8 +183,13 @@ def analyze_pair(pair):
 def generate_signal():
     best = None
     reason = ""
+    now = datetime.now().timestamp()
 
     for pair in PAIRS:
+        last_time = LAST_SIGNAL_TIME.get(pair)
+        if last_time and now - last_time < COOLDOWN:
+            continue
+
         try:
             s, r = analyze_pair(pair)
         except:
@@ -205,6 +209,8 @@ def generate_signal():
 
     if entry > 25:
         return None, "Не ідеальний момент входу"
+
+    LAST_SIGNAL_TIME[best["pair"]] = now
 
     return best | {"entry": entry}, None
 
@@ -268,11 +274,11 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
     s, _ = generate_signal()
 
-    if not s:
+    if not s or s["strength"] != "🔥 СИЛЬНИЙ":
         return
 
     msg = f"""
-{s['strength']}
+🔥 СИЛЬНИЙ
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
