@@ -21,9 +21,6 @@ PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 AUTO = True
 CHAT_IDS = set()
 
-MIN_PROB = 75
-MIN_SCORE = 7
-
 LAST_SIGNAL_TIME = {}
 COOLDOWN = 600  # 10 хв
 
@@ -105,27 +102,9 @@ def candle_pattern(c):
     return None
 
 
-# ================= PRICE ACTION =================
-def price_action(c):
-    last3 = c[-3:]
-
-    if all(x["c"] > x["o"] for x in last3):
-        return "BUY"
-
-    if all(x["c"] < x["o"] for x in last3):
-        return "SELL"
-
-    return None
-
-
-# ================= ANALYSIS =================
+# ================= ANALYSIS (REVERSAL) =================
 def analyze_pair(pair):
     m1, candles = get_candles(pair, "M1")
-    m5, _ = get_candles(pair, "M5")
-    m15, _ = get_candles(pair, "M15")
-
-    trend = "BUY" if ema(m5,20) > ema(m5,50) and ema(m15,20) > ema(m15,50) else "SELL"
-    trend_strength = abs(ema(m5,20) - ema(m5,50)) * 10000
 
     r = round(rsi(m1), 2)
     m = round(macd(m1), 5)
@@ -133,47 +112,60 @@ def analyze_pair(pair):
     support, resistance = support_resistance(m1)
     price = m1[-1]
 
-    near_support = abs(price - support) < (resistance - support) * 0.25
-    near_resistance = abs(price - resistance) < (resistance - support) * 0.25
-
     pat = candle_pattern(candles)
-    pa = price_action(candles)
+
+    near_support = abs(price - support) < (resistance - support) * 0.2
+    near_resistance = abs(price - resistance) < (resistance - support) * 0.2
 
     score = 0
+    direction = None
 
-    if trend == "BUY":
-        if r < 35: score += 2
-        if m > 0: score += 2
-        if near_support: score += 2
-    else:
-        if r > 65: score += 2
-        if m < 0: score += 2
-        if near_resistance: score += 2
+    # ===== BUY =====
+    if r < 35:
+        score += 2
+        direction = "BUY"
 
-    if pat == trend:
-        score += 3
-
-    if pa == trend:
+    if m > 0:
         score += 2
 
-    if score < MIN_SCORE:
-        return None, "Слабкий сигнал"
+    if near_support:
+        score += 3
 
-    prob = min(60 + score*4, 95)
+    if pat == "BUY":
+        score += 3
 
-    if prob < MIN_PROB:
-        return None, "Низька ймовірність"
+    # ===== SELL =====
+    sell_score = 0
 
+    if r > 65:
+        sell_score += 2
+
+    if m < 0:
+        sell_score += 2
+
+    if near_resistance:
+        sell_score += 3
+
+    if pat == "SELL":
+        sell_score += 3
+
+    if sell_score > score:
+        score = sell_score
+        direction = "SELL"
+
+    if score < 7:
+        return None, "Нема розвороту"
+
+    prob = min(65 + score * 4, 95)
     strength = "🔥 СИЛЬНИЙ" if score >= 9 else "⚠️ СЕРЕДНІЙ"
 
     return {
         "pair": pair,
-        "dir": trend,
+        "dir": direction,
         "prob": prob,
         "score": score,
         "rsi": r,
         "macd": m,
-        "trend_strength": round(trend_strength,2),
         "pattern": pat if pat else "нема",
         "strength": strength
     }, None
@@ -252,7 +244,6 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📉 RSI: {s['rsi']}
 📊 MACD: {s['macd']}
-💪 Тренд: {s['trend_strength']}
 🕯 Патерн: {s['pattern']}
 
 ⏱ Вхід через: {s['entry']} сек
@@ -299,7 +290,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 FINAL BOT STARTED")
+    print("🚀 REVERSAL BOT STARTED")
     app.run_polling()
 
 
