@@ -10,6 +10,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 import oandapyV20
 from oandapyV20.endpoints import instruments
 
+import yfinance as yf
+
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -18,20 +20,24 @@ OANDA_KEY = os.getenv("OANDA_API_KEY")
 client = oandapyV20.API(access_token=OANDA_KEY)
 
 PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
-
 CHAT_IDS = set()
 AUTO = True
 
 user_data = {}
 
-# ====== AI WEIGHTS (адаптація) ======
-weights = {
-    "Liquidity": 1.0,
-    "Fake": 1.0,
-    "Volume": 1.0,
-    "Momentum": 1.0,
-    "Entry": 1.0
-}
+# ===== REAL VOLUME (FUTURES) =====
+def get_real_volume():
+    try:
+        data = yf.download("6E=F", interval="1m", period="1d")
+        vols = data["Volume"].tail(10).tolist()
+
+        if len(vols) < 5:
+            return False
+
+        avg = sum(vols[:-1]) / (len(vols) - 1)
+        return vols[-1] > avg * 1.5
+    except:
+        return False
 
 # ================= DATA =================
 
@@ -47,8 +53,7 @@ def get_candles(pair, tf, count=120):
                 "o": float(c["mid"]["o"]),
                 "c": float(c["mid"]["c"]),
                 "h": float(c["mid"]["h"]),
-                "l": float(c["mid"]["l"]),
-                "v": c.get("volume", 1)
+                "l": float(c["mid"]["l"])
             })
     return candles
 
@@ -91,11 +96,6 @@ def fake_breakout(c):
         return "BUY"
     return None
 
-def volume_spike(c):
-    vols = [x["v"] for x in c[-10:]]
-    avg = sum(vols[:-1]) / (len(vols) - 1)
-    return vols[-1] > avg * 1.5
-
 def predict_move(c):
     power = 0
     for x in c[-5:]:
@@ -105,10 +105,10 @@ def predict_move(c):
             power -= abs(x["c"] - x["o"])
 
     if power > 0.001:
-        return "BUY", power
+        return "BUY"
     if power < -0.001:
-        return "SELL", power
-    return "NEUTRAL", power
+        return "SELL"
+    return "NEUTRAL"
 
 def best_entry(c):
     last = c[-1]
@@ -127,16 +127,6 @@ def best_entry(c):
         return "enter"
 
     return "wait"
-
-# ================= AI ADAPT =================
-
-def adjust_weights(win, reasons):
-    for r in reasons.split(", "):
-        if r in weights:
-            if win:
-                weights[r] = min(weights[r] + 0.05, 2.0)
-            else:
-                weights[r] = max(weights[r] - 0.05, 0.5)
 
 # ================= FINAL BOSS =================
 
@@ -160,41 +150,39 @@ def analyze(pair):
 
     sweep = liquidity_sweep(c1)
     fake = fake_breakout(c1)
-    vol = volume_spike(c1)
+    real_vol = get_real_volume()
 
     if sweep == direction:
-        score += 30 * weights["Liquidity"]
+        score += 35
         reasons.append("Liquidity")
 
     if fake == direction:
-        score += 20 * weights["Fake"]
+        score += 20
         reasons.append("Fake")
 
-    if vol:
-        score += 15 * weights["Volume"]
-        reasons.append("Volume")
+    if real_vol:
+        score += 25
+        reasons.append("REAL VOLUME 🔥")
 
-    pred, _ = predict_move(c1)
+    pred = predict_move(c1)
     if pred == direction:
-        score += 15 * weights["Momentum"]
+        score += 15
         reasons.append("Momentum")
 
     entry = best_entry(c1)
     if entry == "enter":
-        score += 10 * weights["Entry"]
-        reasons.append("Entry")
+        score += 10
     else:
         score -= 10
 
-    if score < 65:
+    if score < 70:
         return None
 
     return {
         "pair": pair,
         "dir": direction,
-        "score": round(score),
-        "prob": min(round(score), 95),
-        "entry": entry,
+        "score": score,
+        "prob": min(score, 95),
         "reasons": ", ".join(reasons)
     }
 
@@ -218,24 +206,15 @@ def get_signal():
 def keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
-        [InlineKeyboardButton("💰 Баланс", callback_data="balance")]
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
     ])
-
-def get_user(chat_id):
-    if chat_id not in user_data:
-        user_data[chat_id] = {"balance": 3000, "win": 0, "loss": 0, "last": None}
-    return user_data[chat_id]
-
-# ================= HANDLERS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     CHAT_IDS.add(chat_id)
-    get_user(chat_id)
 
     await update.message.reply_text(
-        "🔥 FINAL BOSS BOT\nREADY",
+        "🔥 FINAL BOSS REAL VOLUME",
         reply_markup=keyboard()
     )
 
@@ -243,9 +222,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
 
     q = update.callback_query
-    chat_id = q.message.chat.id
-    user = get_user(chat_id)
-
     await q.answer()
 
     if q.data == "signal":
@@ -255,57 +231,19 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ Нема сигналу", reply_markup=keyboard())
             return
 
-        user["last"] = s
-
-        bet = round(user["balance"] * 0.1, 2)
-
         msg = f"""
 🔥 FINAL BOSS
 
 📊 {s['pair']}
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-💵 {bet}
 📊 {s['prob']}%
+📈 {s['score']}
 
 🧠 {s['reasons']}
 """
 
-        await q.edit_message_text(
-            msg,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Плюс", callback_data="win"),
-                 InlineKeyboardButton("❌ Мінус", callback_data="loss")],
-                [InlineKeyboardButton("📈 Прогноз", callback_data="signal")]
-            ])
-        )
-
-    elif q.data == "win":
-        user["balance"] += user["balance"] * 0.1
-        user["win"] += 1
-
-        if user["last"]:
-            adjust_weights(True, user["last"]["reasons"])
-
-        await q.edit_message_text("✅ WIN", reply_markup=keyboard())
-
-    elif q.data == "loss":
-        user["balance"] -= user["balance"] * 0.1
-        user["loss"] += 1
-
-        if user["last"]:
-            adjust_weights(False, user["last"]["reasons"])
-
-        await q.edit_message_text("❌ LOSS", reply_markup=keyboard())
-
-    elif q.data == "balance":
-        total = user["win"] + user["loss"]
-        wr = (user["win"] / total * 100) if total > 0 else 0
-
-        await q.edit_message_text(
-            f"💰 {round(user['balance'],2)}\n📊 WR: {round(wr,2)}%",
-            reply_markup=keyboard()
-        )
+        await q.edit_message_text(msg, reply_markup=keyboard())
 
     elif q.data == "auto":
         AUTO = not AUTO
@@ -322,7 +260,7 @@ async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = f"""
-🚀 AUTO
+🚀 AUTO SIGNAL
 
 📊 {s['pair']}
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
@@ -345,7 +283,7 @@ def main():
 
     app.job_queue.run_repeating(auto_signal, interval=300, first=10)
 
-    print("🔥 FINAL BOSS AI RUNNING")
+    print("🔥 FINAL BOSS REAL VOLUME RUNNING")
     app.run_polling()
 
 if __name__ == "__main__":
