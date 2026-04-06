@@ -22,11 +22,11 @@ AUTO = True
 CHAT_IDS = set()
 
 LAST_SIGNAL_TIME = {}
-COOLDOWN = 600  # 10 хв
+COOLDOWN = 600
 
 
 # ================= DATA =================
-def get_candles(pair, tf, count=150):
+def get_candles(pair, tf, count=120):
     params = {"granularity": tf, "count": count, "price": "M"}
     r = instruments.InstrumentsCandles(instrument=pair, params=params)
     client.request(r)
@@ -48,27 +48,19 @@ def get_candles(pair, tf, count=150):
 
 
 # ================= INDICATORS =================
-def ema(d, p):
-    return sum(d[-p:]) / p
-
+def ema(d, p): return sum(d[-p:]) / p
 
 def rsi(d, p=14):
     g, l = [], []
     for i in range(1, len(d)):
         diff = d[i] - d[i-1]
-        if diff > 0:
-            g.append(diff)
-        else:
-            l.append(abs(diff))
-
+        if diff > 0: g.append(diff)
+        else: l.append(abs(diff))
     ag = sum(g[-p:]) / p if g else 0.0001
     al = sum(l[-p:]) / p if l else 0.0001
-
     return 100 - (100 / (1 + ag/al))
 
-
-def macd(d):
-    return ema(d, 12) - ema(d, 26)
+def macd(d): return ema(d, 12) - ema(d, 26)
 
 
 # ================= LEVELS =================
@@ -76,35 +68,55 @@ def support_resistance(data):
     return min(data[-50:]), max(data[-50:])
 
 
-# ================= PATTERNS =================
+# ================= PATTERN =================
 def candle_pattern(c):
     if len(c) < 3:
         return None
 
     c1, c2 = c[-2], c[-1]
 
-    bull1 = c1["c"] > c1["o"]
-    bear1 = c1["c"] < c1["o"]
-    bull2 = c2["c"] > c2["o"]
-    bear2 = c2["c"] < c2["o"]
-
-    if bull2 and bear1 and c2["c"] > c1["o"]:
+    if c2["c"] > c2["o"] and c1["c"] < c1["o"] and c2["c"] > c1["o"]:
         return "BUY"
-    if bear2 and bull1 and c2["c"] < c1["o"]:
+
+    if c2["c"] < c2["o"] and c1["c"] > c1["o"] and c2["c"] < c1["o"]:
         return "SELL"
-
-    body = abs(c2["c"] - c2["o"])
-    wick = c2["h"] - c2["l"]
-
-    if wick > body * 2:
-        return "BUY" if bull2 else "SELL"
 
     return None
 
 
-# ================= ANALYSIS (REVERSAL) =================
+# ================= LATE FILTER =================
+def is_late_entry(candles):
+    if len(candles) < 10:
+        return False
+
+    last = candles[-1]
+
+    body = abs(last["c"] - last["o"])
+    full = last["h"] - last["l"]
+
+    if full == 0:
+        return False
+
+    ratio = body / full
+
+    if ratio > 0.7:
+        return True
+
+    avg = sum(abs(c["c"] - c["o"]) for c in candles[-10:]) / 10
+
+    if body > avg * 2:
+        return True
+
+    return False
+
+
+# ================= ANALYSIS =================
 def analyze_pair(pair):
     m1, candles = get_candles(pair, "M1")
+
+    # 🔥 ФІЛЬТР ЗАПІЗНЕННЯ
+    if is_late_entry(candles):
+        return None, "Запізно заходити"
 
     r = round(rsi(m1), 2)
     m = round(macd(m1), 5)
@@ -120,7 +132,7 @@ def analyze_pair(pair):
     score = 0
     direction = None
 
-    # ===== BUY =====
+    # BUY
     if r < 35:
         score += 2
         direction = "BUY"
@@ -134,7 +146,7 @@ def analyze_pair(pair):
     if pat == "BUY":
         score += 3
 
-    # ===== SELL =====
+    # SELL
     sell_score = 0
 
     if r > 65:
@@ -248,7 +260,6 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ⏱ Вхід через: {s['entry']} сек
 """
-
         await q.message.reply_text(msg)
 
 
@@ -290,7 +301,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 REVERSAL BOT STARTED")
+    print("🚀 FINAL SMART BOT STARTED")
     app.run_polling()
 
 
