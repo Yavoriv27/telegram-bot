@@ -110,11 +110,16 @@ def is_late_entry(candles):
     return False
 
 
+# ================= NEW CANDLE FILTER =================
+def is_good_timing():
+    sec = datetime.now().second
+    return sec >= 50  # тільки останні 10 сек свічки
+
+
 # ================= ANALYSIS =================
 def analyze_pair(pair):
     m1, candles = get_candles(pair, "M1")
 
-    # 🔥 ФІЛЬТР ЗАПІЗНЕННЯ
     if is_late_entry(candles):
         return None, "Запізно заходити"
 
@@ -185,6 +190,9 @@ def analyze_pair(pair):
 
 # ================= SIGNAL =================
 def generate_signal():
+    if not is_good_timing():
+        return None, "Чекаємо нову свічку"
+
     best = None
     reason = ""
     now = datetime.now().timestamp()
@@ -208,15 +216,9 @@ def generate_signal():
     if not best:
         return None, reason
 
-    sec = datetime.now().second
-    entry = 60 - sec
-
-    if entry > 25:
-        return None, "Не ідеальний момент входу"
-
     LAST_SIGNAL_TIME[best["pair"]] = now
 
-    return best | {"entry": entry}, None
+    return best | {"entry": 1}, None
 
 
 # ================= UI =================
@@ -242,7 +244,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s, reason = generate_signal()
 
         if not s:
-            await q.message.reply_text(f"❌ Нема сигналу\nПричина: {reason}")
+            await q.message.reply_text(f"❌ {reason}")
             return
 
         msg = f"""
@@ -251,14 +253,14 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
-📊 Ймовірність: {s['prob']}%
+📊 {s['prob']}%
 📈 Сила: {s['score']}
 
 📉 RSI: {s['rsi']}
 📊 MACD: {s['macd']}
 🕯 Патерн: {s['pattern']}
 
-⏱ Вхід через: {s['entry']} сек
+⏱ Вхід: НОВА СВІЧКА
 """
         await q.message.reply_text(msg)
 
@@ -284,6 +286,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
+⏱ НОВА СВІЧКА
 """
 
     for chat_id in CHAT_IDS:
@@ -301,7 +304,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 FINAL SMART BOT STARTED")
+    print("🚀 MAX PRECISION BOT STARTED")
     app.run_polling()
 
 
