@@ -18,12 +18,7 @@ OANDA_KEY = os.getenv("OANDA_API_KEY")
 client = oandapyV20.API(access_token=OANDA_KEY)
 
 PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
-AUTO = True
 CHAT_IDS = set()
-
-LAST_SIGNAL_TIME = {}
-COOLDOWN = 600
-
 
 # ================= DATA =================
 def get_candles(pair, tf, count=120):
@@ -31,162 +26,163 @@ def get_candles(pair, tf, count=120):
     r = instruments.InstrumentsCandles(instrument=pair, params=params)
     client.request(r)
 
-    closes = []
     candles = []
 
     for c in r.response["candles"]:
         if c["complete"]:
-            o = float(c["mid"]["o"])
-            cl = float(c["mid"]["c"])
-            h = float(c["mid"]["h"])
-            l = float(c["mid"]["l"])
+            candles.append({
+                "o": float(c["mid"]["o"]),
+                "c": float(c["mid"]["c"]),
+                "h": float(c["mid"]["h"]),
+                "l": float(c["mid"]["l"]),
+                "v": c.get("volume", 1)
+            })
 
-            closes.append(cl)
-            candles.append({"o": o, "c": cl, "h": h, "l": l})
+    return candles
 
-    return closes, candles
-
-
-# ================= INDICATORS =================
-def ema(data, p):
-    return sum(data[-p:]) / p
+# ================= CORE =================
 
 def trend(data):
-    fast = ema(data, 10)
-    slow = ema(data, 30)
-    return "UP" if fast > slow else "DOWN"
+    return "UP" if data[-1]["c"] > data[-10]["c"] else "DOWN"
 
+def volatility(c):
+    return sum(abs(x["h"] - x["l"]) for x in c[-10:]) / 10
 
-def rsi(d, p=14):
-    g, l = [], []
-    for i in range(1, len(d)):
-        diff = d[i] - d[i-1]
-        if diff > 0: g.append(diff)
-        else: l.append(abs(diff))
-    ag = sum(g[-p:]) / p if g else 0.0001
-    al = sum(l[-p:]) / p if l else 0.0001
-    return 100 - (100 / (1 + ag/al))
+def is_news_time():
+    now = datetime.now()
+    minutes = now.hour * 60 + now.minute
+    news = [570, 930, 1020]
+    return any(abs(minutes - t) < 30 for t in news)
 
+def too_clean_trend(c):
+    last5 = c[-5:]
+    return all(x["c"] > x["o"] for x in last5) or all(x["c"] < x["o"] for x in last5)
 
-def macd(d):
-    return ema(d, 12) - ema(d, 26)
+def liquidity_sweep(c):
+    last = c[-1]
+    prev_high = max(x["h"] for x in c[-10:-1])
+    prev_low = min(x["l"] for x in c[-10:-1])
 
+    if last["l"] < prev_low and last["c"] > prev_low:
+        return "BUY"
+    if last["h"] > prev_high and last["c"] < prev_high:
+        return "SELL"
+    return None
 
-# ================= PULLBACK =================
-def pullback_entry(candles, direction):
-    if len(candles) < 4:
-        return False
+def fake_breakout(c):
+    last = c[-1]
+    prev = c[-2]
 
-    last = candles[-1]
-    prev = candles[-2]
-    prev2 = candles[-3]
+    if last["h"] > prev["h"] and last["c"] < prev["h"]:
+        return "SELL"
+    if last["l"] < prev["l"] and last["c"] > prev["l"]:
+        return "BUY"
+    return None
 
-    # BUY: було падіння → тепер ріст
-    if direction == "BUY":
-        if prev2["c"] < prev2["o"] and prev["c"] < prev["o"]:
-            if last["c"] > last["o"]:
-                return True
+def volume_spike(c):
+    vols = [x["v"] for x in c[-10:]]
+    avg = sum(vols[:-1]) / (len(vols) - 1)
+    return vols[-1] > avg * 1.5
 
-    # SELL: було зростання → тепер падіння
-    if direction == "SELL":
-        if prev2["c"] > prev2["o"] and prev["c"] > prev["o"]:
-            if last["c"] < last["o"]:
-                return True
+def predict_move(c):
+    power = 0
+    for x in c[-5:]:
+        if x["c"] > x["o"]:
+            power += abs(x["c"] - x["o"])
+        else:
+            power -= abs(x["c"] - x["o"])
 
-    return False
+    if power > 0.001:
+        return "BUY", power
+    if power < -0.001:
+        return "SELL", power
+    return "NEUTRAL", power
 
-
-# ================= LATE =================
-def is_late(c):
+def best_entry(c):
     last = c[-1]
     body = abs(last["c"] - last["o"])
     full = last["h"] - last["l"]
 
     if full == 0:
-        return False
+        return "wait"
 
-    return body / full > 0.7
+    ratio = body / full
 
+    if ratio > 0.7:
+        return "wait"
 
-# ================= ANALYSIS =================
+    if 0.3 < ratio < 0.7:
+        return "enter"
+
+    return "wait"
+
+# ================= FINAL BOSS =================
+
 def analyze(pair):
+    c1 = get_candles(pair, "M1")
+    c15 = get_candles(pair, "M15")
 
-    m1, c1 = get_candles(pair, "M1")
-    m5, c5 = get_candles(pair, "M5")
-    m15, c15 = get_candles(pair, "M15")
+    if is_news_time():
+        return None
 
-    t1 = trend(m1)
-    t5 = trend(m5)
-    t15 = trend(m15)
+    if volatility(c1) < 0.0004:
+        return None
 
-    # синхрон тренду
-    if t15 != t5:
-        return None, "Нема тренду"
+    if too_clean_trend(c1):
+        return None
 
-    direction = "BUY" if t15 == "UP" else "SELL"
-
-    # ❗ ВХІД ТІЛЬКИ ПІСЛЯ ВІДКАТУ
-    if not pullback_entry(c1, direction):
-        return None, "Нема відкату"
-
-    # ❗ АНТИ ЗАПІЗНЕННЯ
-    if is_late(c1):
-        return None, "Запізно"
-
-    r = rsi(m1)
-    m = macd(m1)
+    direction = "BUY" if trend(c15) == "UP" else "SELL"
 
     score = 0
     reasons = []
 
-    if direction == "BUY":
-        if r < 50:
-            score += 2
-        if m > 0:
-            score += 2
+    sweep = liquidity_sweep(c1)
+    fake = fake_breakout(c1)
+    vol = volume_spike(c1)
 
-    if direction == "SELL":
-        if r > 50:
-            score += 2
-        if m < 0:
-            score += 2
+    if sweep == direction:
+        score += 30
+        reasons.append("Liquidity")
 
-    # BOOST
-    if direction == "BUY" and r < 40 and m > 0:
-        score += 2
-        reasons.append("RSI+MACD")
+    if fake == direction:
+        score += 20
+        reasons.append("Fake")
 
-    if direction == "SELL" and r > 60 and m < 0:
-        score += 2
-        reasons.append("RSI+MACD")
+    if vol:
+        score += 15
+        reasons.append("Volume")
 
-    if score < 4:
-        return None, "Слабкий"
+    pred, _ = predict_move(c1)
+    if pred == direction:
+        score += 15
+        reasons.append("Momentum")
 
-    prob = min(65 + score * 5, 95)
+    entry = best_entry(c1)
+    if entry == "enter":
+        score += 10
+    else:
+        score -= 10
+
+    if score < 65:
+        return None
 
     return {
         "pair": pair,
         "dir": direction,
-        "prob": prob,
         "score": score,
-        "trend": t15,
+        "prob": min(score, 95),
+        "entry": entry,
         "reasons": ", ".join(reasons)
-    }, None
-
+    }
 
 # ================= SIGNAL =================
+
 def get_signal():
     best = None
-    now = datetime.now().timestamp()
 
     for pair in PAIRS:
-        last = LAST_SIGNAL_TIME.get(pair)
-        if last and now - last < COOLDOWN:
-            continue
-
         try:
-            s, _ = analyze(pair)
+            s = analyze(pair)
         except:
             continue
 
@@ -194,92 +190,60 @@ def get_signal():
             if not best or s["prob"] > best["prob"]:
                 best = s
 
-    if not best:
-        return None, "Нема сигналу"
-
-    LAST_SIGNAL_TIME[best["pair"]] = now
-
-    return best, None
-
+    return best
 
 # ================= UI =================
-def kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="sig")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
-    ])
 
+def keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")]
+    ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("😈 ULTIMATE BOT READY", reply_markup=kb())
 
+    await update.message.reply_text(
+        "🔥 FINAL BOSS BOT\nГотовий до роботи",
+        reply_markup=keyboard()
+    )
 
-async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AUTO
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    if q.data == "sig":
-        s, r = get_signal()
+    if q.data == "signal":
+        s = get_signal()
 
         if not s:
-            await q.message.reply_text(f"❌ {r}")
+            await q.edit_message_text("❌ Нема сильного сигналу", reply_markup=keyboard())
             return
 
         msg = f"""
-🔥 ULTIMATE
+🔥 FINAL BOSS
 
 📊 {s['pair']}
-{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
+{'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-📊 {s['prob']}%
+📊 Ймовірність: {s['prob']}%
 📈 Score: {s['score']}
 
-📈 Тренд: {s['trend']}
-💡 {s['reasons']}
-"""
-        await q.message.reply_text(msg)
+🧠 {s['reasons']}
 
-    elif q.data == "auto":
-        AUTO = not AUTO
-        await q.message.edit_text(f"🤖 AUTO: {AUTO}", reply_markup=kb())
-
-
-async def auto(context: ContextTypes.DEFAULT_TYPE):
-    if not AUTO:
-        return
-
-    s, _ = get_signal()
-
-    if not s or s["score"] < 5:
-        return
-
-    msg = f"""
-🔥 SIGNAL
-🏆 {s['pair']}
-{'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
-📊 {s['prob']}%
+{'🔔 Входити зараз' if s['prob']>80 else '⏳ Краще зачекати'}
 """
 
-    for chat_id in CHAT_IDS:
-        try:
-            await context.bot.send_message(chat_id=chat_id, text=msg)
-        except:
-            pass
+        await q.edit_message_text(msg, reply_markup=keyboard())
 
+# ================= MAIN =================
 
 def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(btn))
+    app.add_handler(CallbackQueryHandler(buttons))
 
-    app.job_queue.run_repeating(auto, interval=60, first=10)
-
-    print("😈 ULTIMATE BOT STARTED")
+    print("🔥 FINAL BOSS STARTED")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
