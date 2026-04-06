@@ -117,22 +117,54 @@ def is_late_entry(candles):
     return False
 
 
+# ================= BOOST =================
+def boost_signal(score, direction, rsi_val, macd_val, pat, near_support, near_resistance, candles):
+    boost = 0
+    reasons = []
+
+    # RSI + MACD збіг
+    if direction == "BUY" and rsi_val < 35 and macd_val > 0:
+        boost += 2
+        reasons.append("RSI+MACD")
+
+    if direction == "SELL" and rsi_val > 65 and macd_val < 0:
+        boost += 2
+        reasons.append("RSI+MACD")
+
+    # Рівень
+    if near_support or near_resistance:
+        boost += 1
+        reasons.append("Рівень")
+
+    # Патерн
+    if pat == direction:
+        boost += 1
+        reasons.append("Патерн")
+
+    # 3 свічки підряд
+    if len(candles) >= 3:
+        last3 = candles[-3:]
+        if direction == "BUY" and all(c["c"] < c["o"] for c in last3):
+            boost += 1
+            reasons.append("3 свічки")
+
+        if direction == "SELL" and all(c["c"] > c["o"] for c in last3):
+            boost += 1
+            reasons.append("3 свічки")
+
+    return score + boost, reasons
+
+
 # ================= ANALYSIS =================
 def analyze_pair(pair):
     m1, candles = get_candles(pair, "M1")
 
     if is_late_entry(candles):
-        return None, "Запізно заходити"
+        return None, "Запізно"
 
     strength = market_strength(candles)
 
-    # 🔥 АДАПТАЦІЯ
-    if strength == "LOW":
-        min_score = 5
-    elif strength == "MEDIUM":
-        min_score = 6
-    else:
-        min_score = 7
+    min_score = 5 if strength == "LOW" else 6 if strength == "MEDIUM" else 7
 
     r = round(rsi(m1), 2)
     m = round(macd(m1), 5)
@@ -148,7 +180,6 @@ def analyze_pair(pair):
     score = 0
     direction = None
 
-    # BUY
     if r < 40:
         score += 2
         direction = "BUY"
@@ -159,7 +190,6 @@ def analyze_pair(pair):
     if pat == "BUY":
         score += 2
 
-    # SELL
     sell_score = 0
     if r > 60:
         sell_score += 2
@@ -174,11 +204,14 @@ def analyze_pair(pair):
         score = sell_score
         direction = "SELL"
 
+    # 🔥 ПІДСИЛЕННЯ
+    score, reasons = boost_signal(score, direction, r, m, pat, near_support, near_resistance, candles)
+
     if score < min_score:
         return None, f"Слабкий ({strength})"
 
     prob = min(60 + score * 5, 95)
-    label = f"{strength}"
+    label = "🔥 ПІДСИЛЕНИЙ" if len(reasons) >= 2 else "⚠️"
 
     return {
         "pair": pair,
@@ -188,7 +221,8 @@ def analyze_pair(pair):
         "rsi": r,
         "macd": m,
         "pattern": pat if pat else "нема",
-        "strength": label
+        "strength": label,
+        "reasons": ", ".join(reasons)
     }, None
 
 
@@ -229,7 +263,7 @@ def kb():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🚀 ADAPTIVE BOT READY", reply_markup=kb())
+    await update.message.reply_text("🚀 BOOST BOT READY", reply_markup=kb())
 
 
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -246,6 +280,8 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
+{s['strength']}
+
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
@@ -256,7 +292,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 MACD: {s['macd']}
 🕯 {s['pattern']}
 
-📌 Ринок: {s['strength']}
+💡 Причина: {s['reasons']}
 """
         await q.message.reply_text(msg)
 
@@ -274,18 +310,15 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
     s, _ = generate_signal()
 
-    if not s:
-        return
-
-    # тільки норм сигнали
-    if s["score"] < 6:
+    if not s or s["score"] < 7:
         return
 
     msg = f"""
+🔥 СИЛЬНИЙ
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
-📌 {s['strength']}
+💡 {s['reasons']}
 """
 
     for chat_id in CHAT_IDS:
@@ -303,7 +336,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 SAFE ADAPTIVE BOT STARTED")
+    print("🚀 BOOST BOT STARTED")
     app.run_polling()
 
 
