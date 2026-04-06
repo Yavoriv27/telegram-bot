@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os
 import asyncio
 from datetime import datetime
@@ -246,21 +248,16 @@ async def instant_loop(app):
 
 # ================= MAIN =================
 
-def main():
+async def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    app.job_queue.run_repeating(
-        lambda ctx: asyncio.create_task(instant_loop(app)),
-        interval=20,
-        first=1
-    )
+    asyncio.create_task(instant_loop(app))
 
     print("🔥 FINAL BOSS INSTANT RUNNING")
-    app.run_polling()
-
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
