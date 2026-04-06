@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import os
 import asyncio
 from datetime import datetime
