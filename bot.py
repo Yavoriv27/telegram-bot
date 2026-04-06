@@ -23,22 +23,6 @@ PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
 CHAT_IDS = set()
 AUTO = True
 
-user_data = {}
-
-# ===== REAL VOLUME (FUTURES) =====
-def get_real_volume():
-    try:
-        data = yf.download("6E=F", interval="1m", period="1d")
-        vols = data["Volume"].tail(10).tolist()
-
-        if len(vols) < 5:
-            return False
-
-        avg = sum(vols[:-1]) / (len(vols) - 1)
-        return vols[-1] > avg * 1.5
-    except:
-        return False
-
 # ================= DATA =================
 
 def get_candles(pair, tf, count=120):
@@ -56,6 +40,21 @@ def get_candles(pair, tf, count=120):
                 "l": float(c["mid"]["l"])
             })
     return candles
+
+# ================= REAL VOLUME =================
+
+def get_real_volume():
+    try:
+        data = yf.download("6E=F", interval="1m", period="1d", progress=False)
+        vols = data["Volume"].tail(10).tolist()
+
+        if len(vols) < 5:
+            return False
+
+        avg = sum(vols[:-1]) / (len(vols) - 1)
+        return vols[-1] > avg * 1.5
+    except:
+        return False
 
 # ================= CORE =================
 
@@ -128,7 +127,61 @@ def best_entry(c):
 
     return "wait"
 
-# ================= FINAL BOSS =================
+# ================= ULTRA CANDLE AI =================
+
+def candle_ai(c):
+    last = c[-1]
+
+    body = abs(last["c"] - last["o"])
+    full = last["h"] - last["l"]
+
+    if full == 0:
+        return "NONE", 0
+
+    upper = last["h"] - max(last["c"], last["o"])
+    lower = min(last["c"], last["o"]) - last["l"]
+
+    score = 0
+    direction = "NEUTRAL"
+
+    body_ratio = body / full
+
+    if body_ratio > 0.6:
+        score += 2
+
+    close_pos = (last["c"] - last["l"]) / full
+
+    if close_pos > 0.7:
+        direction = "BUY"
+        score += 2
+    elif close_pos < 0.3:
+        direction = "SELL"
+        score += 2
+
+    if lower > body * 1.5:
+        direction = "BUY"
+        score += 1
+
+    if upper > body * 1.5:
+        direction = "SELL"
+        score += 1
+
+    return direction, score
+
+def candle_sequence(c):
+    last3 = c[-3:]
+
+    bulls = sum(1 for x in last3 if x["c"] > x["o"])
+    bears = sum(1 for x in last3 if x["c"] < x["o"])
+
+    if bulls >= 2:
+        return "BUY", bulls
+    if bears >= 2:
+        return "SELL", bears
+
+    return "NEUTRAL", 0
+
+# ================= ANALYZE =================
 
 def analyze(pair):
     c1 = get_candles(pair, "M1")
@@ -153,7 +206,7 @@ def analyze(pair):
     real_vol = get_real_volume()
 
     if sweep == direction:
-        score += 35
+        score += 30
         reasons.append("Liquidity")
 
     if fake == direction:
@@ -162,12 +215,26 @@ def analyze(pair):
 
     if real_vol:
         score += 25
-        reasons.append("REAL VOLUME 🔥")
+        reasons.append("REAL VOL")
 
     pred = predict_move(c1)
     if pred == direction:
         score += 15
         reasons.append("Momentum")
+
+    # ULTRA CANDLE
+    ai_dir, ai_score = candle_ai(c1)
+
+    if ai_dir == direction:
+        score += 10 + ai_score
+        reasons.append("Candle AI")
+    elif ai_dir != "NEUTRAL":
+        score -= 5
+
+    seq_dir, _ = candle_sequence(c1)
+    if seq_dir == direction:
+        score += 8
+        reasons.append("Sequence")
 
     entry = best_entry(c1)
     if entry == "enter":
@@ -175,7 +242,7 @@ def analyze(pair):
     else:
         score -= 10
 
-    if score < 70:
+    if score < 65:
         return None
 
     return {
@@ -210,11 +277,10 @@ def keyboard():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    CHAT_IDS.add(chat_id)
+    CHAT_IDS.add(update.effective_chat.id)
 
     await update.message.reply_text(
-        "🔥 FINAL BOSS REAL VOLUME",
+        "🔥 FINAL BOSS AI READY",
         reply_markup=keyboard()
     )
 
@@ -283,7 +349,7 @@ def main():
 
     app.job_queue.run_repeating(auto_signal, interval=300, first=10)
 
-    print("🔥 FINAL BOSS REAL VOLUME RUNNING")
+    print("🔥 FINAL BOSS ULTRA RUNNING")
     app.run_polling()
 
 if __name__ == "__main__":
