@@ -66,49 +66,15 @@ def macd(d):
 
 
 # ================= TREND =================
-def trend_filter(data):
-    ema_fast = ema(data, 10)
-    ema_slow = ema(data, 30)
+def trend_tf(data):
+    fast = ema(data, 10)
+    slow = ema(data, 30)
 
-    if ema_fast > ema_slow:
+    if fast > slow:
         return "UP"
-    elif ema_fast < ema_slow:
+    elif fast < slow:
         return "DOWN"
     return "FLAT"
-
-
-# ================= VOLATILITY =================
-def market_strength(candles):
-    sizes = [abs(c["c"] - c["o"]) for c in candles[-20:]]
-    avg = sum(sizes) / len(sizes)
-
-    if avg < 0.0002:
-        return "LOW"
-    elif avg < 0.0005:
-        return "MEDIUM"
-    else:
-        return "HIGH"
-
-
-# ================= LEVELS =================
-def support_resistance(data):
-    return min(data[-50:]), max(data[-50:])
-
-
-# ================= PATTERN =================
-def candle_pattern(c):
-    if len(c) < 3:
-        return None
-
-    c1, c2 = c[-2], c[-1]
-
-    if c2["c"] > c2["o"] and c1["c"] < c1["o"] and c2["c"] > c1["o"]:
-        return "BUY"
-
-    if c2["c"] < c2["o"] and c1["c"] > c1["o"] and c2["c"] < c1["o"]:
-        return "SELL"
-
-    return None
 
 
 # ================= LATE FILTER =================
@@ -123,102 +89,71 @@ def is_late_entry(candles):
     if body / full > 0.7:
         return True
 
-    avg = sum(abs(c["c"] - c["o"]) for c in candles[-10:]) / 10
-
-    if body > avg * 2:
-        return True
-
     return False
-
-
-# ================= BOOST =================
-def boost_signal(score, direction, rsi_val, macd_val, pat, near_support, near_resistance):
-    boost = 0
-    reasons = []
-
-    if direction == "BUY" and rsi_val < 35 and macd_val > 0:
-        boost += 2
-        reasons.append("RSI+MACD")
-
-    if direction == "SELL" and rsi_val > 65 and macd_val < 0:
-        boost += 2
-        reasons.append("RSI+MACD")
-
-    if near_support or near_resistance:
-        boost += 1
-        reasons.append("Рівень")
-
-    if pat == direction:
-        boost += 1
-        reasons.append("Патерн")
-
-    return score + boost, reasons
 
 
 # ================= ANALYSIS =================
 def analyze_pair(pair):
-    m1, candles = get_candles(pair, "M1")
 
-    if is_late_entry(candles):
+    # 🔥 MULTI TF
+    m1, c1 = get_candles(pair, "M1")
+    m5, c5 = get_candles(pair, "M5")
+    m15, c15 = get_candles(pair, "M15")
+
+    trend1 = trend_tf(m1)
+    trend5 = trend_tf(m5)
+    trend15 = trend_tf(m15)
+
+    # ❗ ФІЛЬТР СИНХРОНУ
+    if trend15 != trend5:
+        return None, "Нема синхрону M15/M5"
+
+    direction = "BUY" if trend15 == "UP" else "SELL"
+
+    # ❗ АНТИ ЗАПІЗНЕННЯ
+    if is_late_entry(c1):
         return None, "Запізно"
-
-    trend = trend_filter(m1)
-    strength = market_strength(candles)
-
-    min_score = 5 if strength == "LOW" else 6 if strength == "MEDIUM" else 7
 
     r = round(rsi(m1), 2)
     m = round(macd(m1), 5)
 
-    support, resistance = support_resistance(m1)
-    price = m1[-1]
-
-    pat = candle_pattern(candles)
-
-    near_support = abs(price - support) < (resistance - support) * 0.25
-    near_resistance = abs(price - resistance) < (resistance - support) * 0.25
-
     score = 0
-    direction = None
 
-    # BUY
-    if r < 40:
+    # RSI
+    if direction == "BUY" and r < 50:
         score += 2
-        direction = "BUY"
-    if m > 0:
-        score += 2
-    if near_support:
-        score += 2
-    if pat == "BUY":
+    if direction == "SELL" and r > 50:
         score += 2
 
-    # SELL
-    sell_score = 0
-    if r > 60:
-        sell_score += 2
-    if m < 0:
-        sell_score += 2
-    if near_resistance:
-        sell_score += 2
-    if pat == "SELL":
-        sell_score += 2
+    # MACD
+    if direction == "BUY" and m > 0:
+        score += 2
+    if direction == "SELL" and m < 0:
+        score += 2
 
-    if sell_score > score:
-        score = sell_score
-        direction = "SELL"
+    # СВІЧКА
+    last = c1[-1]
+    if direction == "BUY" and last["c"] > last["o"]:
+        score += 1
+    if direction == "SELL" and last["c"] < last["o"]:
+        score += 1
 
-    # ❗ ФІЛЬТР ТРЕНДУ
-    if trend == "UP" and direction == "SELL":
-        return None, "Проти тренду"
+    # 🔥 BOOST
+    boost = 0
+    reasons = []
 
-    if trend == "DOWN" and direction == "BUY":
-        return None, "Проти тренду"
+    if direction == "BUY" and r < 40 and m > 0:
+        boost += 2
+        reasons.append("RSI+MACD")
 
-    # 🔥 ПІДСИЛЕННЯ
-    score, reasons = boost_signal(score, direction, r, m, pat, near_support, near_resistance)
+    if direction == "SELL" and r > 60 and m < 0:
+        boost += 2
+        reasons.append("RSI+MACD")
 
-    if score < min_score:
-        return None, f"Слабкий ({strength})"
+    score += boost
+
+    if score < 5:
+        return None, "Слабкий сигнал"
 
     prob = min(60 + score * 5, 95)
 
@@ -227,10 +162,7 @@ def analyze_pair(pair):
         "dir": direction,
         "prob": prob,
         "score": score,
-        "rsi": r,
-        "macd": m,
-        "pattern": pat if pat else "нема",
-        "trend": trend,
+        "trend": trend15,
         "reasons": ", ".join(reasons)
     }, None
 
@@ -272,7 +204,7 @@ def kb():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🚀 TREND BOT READY", reply_markup=kb())
+    await update.message.reply_text("🚀 MAX BOT READY", reply_markup=kb())
 
 
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -289,15 +221,13 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
+🔥 СИЛЬНИЙ
+
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
 📊 {s['prob']}%
 📈 Score: {s['score']}
-
-📉 RSI: {s['rsi']}
-📊 MACD: {s['macd']}
-🕯 {s['pattern']}
 
 📈 Тренд: {s['trend']}
 💡 {s['reasons']}
@@ -318,15 +248,14 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
     s, _ = generate_signal()
 
-    if not s or s["score"] < 7:
+    if not s or s["score"] < 6:
         return
 
     msg = f"""
-🔥 СИЛЬНИЙ
+🔥 СИГНАЛ
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
-📈 Тренд: {s['trend']}
 """
 
     for chat_id in CHAT_IDS:
@@ -344,7 +273,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 TREND BOT STARTED")
+    print("🚀 MAX PRECISION BOT STARTED")
     app.run_polling()
 
 
