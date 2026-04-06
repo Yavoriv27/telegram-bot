@@ -90,16 +90,13 @@ def is_late_entry(candles):
         return False
 
     last = candles[-1]
-
     body = abs(last["c"] - last["o"])
     full = last["h"] - last["l"]
 
     if full == 0:
         return False
 
-    ratio = body / full
-
-    if ratio > 0.7:
+    if body / full > 0.7:
         return True
 
     avg = sum(abs(c["c"] - c["o"]) for c in candles[-10:]) / 10
@@ -110,10 +107,23 @@ def is_late_entry(candles):
     return False
 
 
-# ================= NEW CANDLE FILTER =================
-def is_good_timing():
-    sec = datetime.now().second
-    return sec >= 50  # тільки останні 10 сек свічки
+# ================= CONFIRMATION =================
+def confirm_entry(candles, direction):
+    if len(candles) < 3:
+        return False
+
+    last = candles[-1]
+    prev = candles[-2]
+
+    # BUY підтвердження
+    if direction == "BUY":
+        return last["c"] > last["o"] and last["c"] > prev["c"]
+
+    # SELL підтвердження
+    if direction == "SELL":
+        return last["c"] < last["o"] and last["c"] < prev["c"]
+
+    return False
 
 
 # ================= ANALYSIS =================
@@ -141,28 +151,21 @@ def analyze_pair(pair):
     if r < 35:
         score += 2
         direction = "BUY"
-
     if m > 0:
         score += 2
-
     if near_support:
         score += 3
-
     if pat == "BUY":
         score += 3
 
     # SELL
     sell_score = 0
-
     if r > 65:
         sell_score += 2
-
     if m < 0:
         sell_score += 2
-
     if near_resistance:
         sell_score += 3
-
     if pat == "SELL":
         sell_score += 3
 
@@ -172,6 +175,10 @@ def analyze_pair(pair):
 
     if score < 7:
         return None, "Нема розвороту"
+
+    # 🔥 НОВЕ: ЧЕКАЄМО ПІДТВЕРДЖЕННЯ
+    if not confirm_entry(candles, direction):
+        return None, "Чекаємо підтвердження"
 
     prob = min(65 + score * 4, 95)
     strength = "🔥 СИЛЬНИЙ" if score >= 9 else "⚠️ СЕРЕДНІЙ"
@@ -190,9 +197,6 @@ def analyze_pair(pair):
 
 # ================= SIGNAL =================
 def generate_signal():
-    if not is_good_timing():
-        return None, "Чекаємо нову свічку"
-
     best = None
     reason = ""
     now = datetime.now().timestamp()
@@ -260,7 +264,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 MACD: {s['macd']}
 🕯 Патерн: {s['pattern']}
 
-⏱ Вхід: НОВА СВІЧКА
+⏱ Вхід: ПІСЛЯ ПІДТВЕРДЖЕННЯ
 """
         await q.message.reply_text(msg)
 
@@ -286,7 +290,7 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
-⏱ НОВА СВІЧКА
+⏱ ПІСЛЯ ПІДТВЕРДЖЕННЯ
 """
 
     for chat_id in CHAT_IDS:
@@ -304,7 +308,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 MAX PRECISION BOT STARTED")
+    print("🚀 IDEAL ENTRY BOT STARTED")
     app.run_polling()
 
 
