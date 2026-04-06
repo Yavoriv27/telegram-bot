@@ -18,16 +18,29 @@ OANDA_KEY = os.getenv("OANDA_API_KEY")
 client = oandapyV20.API(access_token=OANDA_KEY)
 
 PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
+
 CHAT_IDS = set()
+AUTO = True
+
+user_data = {}
+
+# ====== AI WEIGHTS (адаптація) ======
+weights = {
+    "Liquidity": 1.0,
+    "Fake": 1.0,
+    "Volume": 1.0,
+    "Momentum": 1.0,
+    "Entry": 1.0
+}
 
 # ================= DATA =================
+
 def get_candles(pair, tf, count=120):
     params = {"granularity": tf, "count": count, "price": "M"}
     r = instruments.InstrumentsCandles(instrument=pair, params=params)
     client.request(r)
 
     candles = []
-
     for c in r.response["candles"]:
         if c["complete"]:
             candles.append({
@@ -37,7 +50,6 @@ def get_candles(pair, tf, count=120):
                 "l": float(c["mid"]["l"]),
                 "v": c.get("volume", 1)
             })
-
     return candles
 
 # ================= CORE =================
@@ -49,7 +61,7 @@ def volatility(c):
     return sum(abs(x["h"] - x["l"]) for x in c[-10:]) / 10
 
 def is_news_time():
-    now = datetime.now()
+    now = datetime.utcnow()
     minutes = now.hour * 60 + now.minute
     news = [570, 930, 1020]
     return any(abs(minutes - t) < 30 for t in news)
@@ -116,6 +128,16 @@ def best_entry(c):
 
     return "wait"
 
+# ================= AI ADAPT =================
+
+def adjust_weights(win, reasons):
+    for r in reasons.split(", "):
+        if r in weights:
+            if win:
+                weights[r] = min(weights[r] + 0.05, 2.0)
+            else:
+                weights[r] = max(weights[r] - 0.05, 0.5)
+
 # ================= FINAL BOSS =================
 
 def analyze(pair):
@@ -141,25 +163,26 @@ def analyze(pair):
     vol = volume_spike(c1)
 
     if sweep == direction:
-        score += 30
+        score += 30 * weights["Liquidity"]
         reasons.append("Liquidity")
 
     if fake == direction:
-        score += 20
+        score += 20 * weights["Fake"]
         reasons.append("Fake")
 
     if vol:
-        score += 15
+        score += 15 * weights["Volume"]
         reasons.append("Volume")
 
     pred, _ = predict_move(c1)
     if pred == direction:
-        score += 15
+        score += 15 * weights["Momentum"]
         reasons.append("Momentum")
 
     entry = best_entry(c1)
     if entry == "enter":
-        score += 10
+        score += 10 * weights["Entry"]
+        reasons.append("Entry")
     else:
         score -= 10
 
@@ -169,13 +192,11 @@ def analyze(pair):
     return {
         "pair": pair,
         "dir": direction,
-        "score": score,
-        "prob": min(score, 95),
+        "score": round(score),
+        "prob": min(round(score), 95),
         "entry": entry,
         "reasons": ", ".join(reasons)
     }
-
-# ================= SIGNAL =================
 
 def get_signal():
     best = None
@@ -196,27 +217,47 @@ def get_signal():
 
 def keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")]
+        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
+        [InlineKeyboardButton("💰 Баланс", callback_data="balance")]
     ])
 
+def get_user(chat_id):
+    if chat_id not in user_data:
+        user_data[chat_id] = {"balance": 3000, "win": 0, "loss": 0, "last": None}
+    return user_data[chat_id]
+
+# ================= HANDLERS =================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    CHAT_IDS.add(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    CHAT_IDS.add(chat_id)
+    get_user(chat_id)
 
     await update.message.reply_text(
-        "🔥 FINAL BOSS BOT\nГотовий до роботи",
+        "🔥 FINAL BOSS BOT\nREADY",
         reply_markup=keyboard()
     )
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global AUTO
+
     q = update.callback_query
+    chat_id = q.message.chat.id
+    user = get_user(chat_id)
+
     await q.answer()
 
     if q.data == "signal":
         s = get_signal()
 
         if not s:
-            await q.edit_message_text("❌ Нема сильного сигналу", reply_markup=keyboard())
+            await q.edit_message_text("❌ Нема сигналу", reply_markup=keyboard())
             return
+
+        user["last"] = s
+
+        bet = round(user["balance"] * 0.1, 2)
 
         msg = f"""
 🔥 FINAL BOSS
@@ -224,15 +265,75 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 {s['pair']}
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-📊 Ймовірність: {s['prob']}%
-📈 Score: {s['score']}
+💵 {bet}
+📊 {s['prob']}%
 
 🧠 {s['reasons']}
-
-{'🔔 Входити зараз' if s['prob']>80 else '⏳ Краще зачекати'}
 """
 
-        await q.edit_message_text(msg, reply_markup=keyboard())
+        await q.edit_message_text(
+            msg,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Плюс", callback_data="win"),
+                 InlineKeyboardButton("❌ Мінус", callback_data="loss")],
+                [InlineKeyboardButton("📈 Прогноз", callback_data="signal")]
+            ])
+        )
+
+    elif q.data == "win":
+        user["balance"] += user["balance"] * 0.1
+        user["win"] += 1
+
+        if user["last"]:
+            adjust_weights(True, user["last"]["reasons"])
+
+        await q.edit_message_text("✅ WIN", reply_markup=keyboard())
+
+    elif q.data == "loss":
+        user["balance"] -= user["balance"] * 0.1
+        user["loss"] += 1
+
+        if user["last"]:
+            adjust_weights(False, user["last"]["reasons"])
+
+        await q.edit_message_text("❌ LOSS", reply_markup=keyboard())
+
+    elif q.data == "balance":
+        total = user["win"] + user["loss"]
+        wr = (user["win"] / total * 100) if total > 0 else 0
+
+        await q.edit_message_text(
+            f"💰 {round(user['balance'],2)}\n📊 WR: {round(wr,2)}%",
+            reply_markup=keyboard()
+        )
+
+    elif q.data == "auto":
+        AUTO = not AUTO
+        await q.edit_message_text(f"🤖 AUTO: {AUTO}", reply_markup=keyboard())
+
+# ================= AUTO =================
+
+async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
+    if not AUTO:
+        return
+
+    s = get_signal()
+    if not s:
+        return
+
+    msg = f"""
+🚀 AUTO
+
+📊 {s['pair']}
+{'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
+📊 {s['prob']}%
+"""
+
+    for chat_id in CHAT_IDS:
+        try:
+            await context.bot.send_message(chat_id, msg)
+        except:
+            pass
 
 # ================= MAIN =================
 
@@ -242,7 +343,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    print("🔥 FINAL BOSS STARTED")
+    app.job_queue.run_repeating(auto_signal, interval=300, first=10)
+
+    print("🔥 FINAL BOSS AI RUNNING")
     app.run_polling()
 
 if __name__ == "__main__":
