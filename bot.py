@@ -51,6 +51,12 @@ def get_candles(pair, tf, count=120):
 def ema(data, p):
     return sum(data[-p:]) / p
 
+def trend(data):
+    fast = ema(data, 10)
+    slow = ema(data, 30)
+    return "UP" if fast > slow else "DOWN"
+
+
 def rsi(d, p=14):
     g, l = [], []
     for i in range(1, len(d)):
@@ -61,124 +67,126 @@ def rsi(d, p=14):
     al = sum(l[-p:]) / p if l else 0.0001
     return 100 - (100 / (1 + ag/al))
 
+
 def macd(d):
     return ema(d, 12) - ema(d, 26)
 
 
-# ================= TREND =================
-def trend_tf(data):
-    fast = ema(data, 10)
-    slow = ema(data, 30)
+# ================= PULLBACK =================
+def pullback_entry(candles, direction):
+    if len(candles) < 4:
+        return False
 
-    if fast > slow:
-        return "UP"
-    elif fast < slow:
-        return "DOWN"
-    return "FLAT"
-
-
-# ================= LATE FILTER =================
-def is_late_entry(candles):
     last = candles[-1]
+    prev = candles[-2]
+    prev2 = candles[-3]
+
+    # BUY: було падіння → тепер ріст
+    if direction == "BUY":
+        if prev2["c"] < prev2["o"] and prev["c"] < prev["o"]:
+            if last["c"] > last["o"]:
+                return True
+
+    # SELL: було зростання → тепер падіння
+    if direction == "SELL":
+        if prev2["c"] > prev2["o"] and prev["c"] > prev["o"]:
+            if last["c"] < last["o"]:
+                return True
+
+    return False
+
+
+# ================= LATE =================
+def is_late(c):
+    last = c[-1]
     body = abs(last["c"] - last["o"])
     full = last["h"] - last["l"]
 
     if full == 0:
         return False
 
-    if body / full > 0.7:
-        return True
-
-    return False
+    return body / full > 0.7
 
 
 # ================= ANALYSIS =================
-def analyze_pair(pair):
+def analyze(pair):
 
-    # 🔥 MULTI TF
     m1, c1 = get_candles(pair, "M1")
     m5, c5 = get_candles(pair, "M5")
     m15, c15 = get_candles(pair, "M15")
 
-    trend1 = trend_tf(m1)
-    trend5 = trend_tf(m5)
-    trend15 = trend_tf(m15)
+    t1 = trend(m1)
+    t5 = trend(m5)
+    t15 = trend(m15)
 
-    # ❗ ФІЛЬТР СИНХРОНУ
-    if trend15 != trend5:
-        return None, "Нема синхрону M15/M5"
+    # синхрон тренду
+    if t15 != t5:
+        return None, "Нема тренду"
 
-    direction = "BUY" if trend15 == "UP" else "SELL"
+    direction = "BUY" if t15 == "UP" else "SELL"
+
+    # ❗ ВХІД ТІЛЬКИ ПІСЛЯ ВІДКАТУ
+    if not pullback_entry(c1, direction):
+        return None, "Нема відкату"
 
     # ❗ АНТИ ЗАПІЗНЕННЯ
-    if is_late_entry(c1):
+    if is_late(c1):
         return None, "Запізно"
 
-    r = round(rsi(m1), 2)
-    m = round(macd(m1), 5)
+    r = rsi(m1)
+    m = macd(m1)
 
     score = 0
-
-    # RSI
-    if direction == "BUY" and r < 50:
-        score += 2
-    if direction == "SELL" and r > 50:
-        score += 2
-
-    # MACD
-    if direction == "BUY" and m > 0:
-        score += 2
-    if direction == "SELL" and m < 0:
-        score += 2
-
-    # СВІЧКА
-    last = c1[-1]
-    if direction == "BUY" and last["c"] > last["o"]:
-        score += 1
-    if direction == "SELL" and last["c"] < last["o"]:
-        score += 1
-
-    # 🔥 BOOST
-    boost = 0
     reasons = []
 
+    if direction == "BUY":
+        if r < 50:
+            score += 2
+        if m > 0:
+            score += 2
+
+    if direction == "SELL":
+        if r > 50:
+            score += 2
+        if m < 0:
+            score += 2
+
+    # BOOST
     if direction == "BUY" and r < 40 and m > 0:
-        boost += 2
+        score += 2
         reasons.append("RSI+MACD")
 
     if direction == "SELL" and r > 60 and m < 0:
-        boost += 2
+        score += 2
         reasons.append("RSI+MACD")
 
-    score += boost
+    if score < 4:
+        return None, "Слабкий"
 
-    if score < 5:
-        return None, "Слабкий сигнал"
-
-    prob = min(60 + score * 5, 95)
+    prob = min(65 + score * 5, 95)
 
     return {
         "pair": pair,
         "dir": direction,
         "prob": prob,
         "score": score,
-        "trend": trend15,
+        "trend": t15,
         "reasons": ", ".join(reasons)
     }, None
 
 
 # ================= SIGNAL =================
-def generate_signal():
+def get_signal():
     best = None
     now = datetime.now().timestamp()
 
     for pair in PAIRS:
-        last_time = LAST_SIGNAL_TIME.get(pair)
-        if last_time and now - last_time < COOLDOWN:
+        last = LAST_SIGNAL_TIME.get(pair)
+        if last and now - last < COOLDOWN:
             continue
 
         try:
-            s, _ = analyze_pair(pair)
+            s, _ = analyze(pair)
         except:
             continue
 
@@ -187,7 +195,7 @@ def generate_signal():
                 best = s
 
     if not best:
-        return None, "Нема умов"
+        return None, "Нема сигналу"
 
     LAST_SIGNAL_TIME[best["pair"]] = now
 
@@ -197,31 +205,30 @@ def generate_signal():
 # ================= UI =================
 def kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
+        [InlineKeyboardButton("📈 Прогноз", callback_data="sig")],
         [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
     ])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🚀 MAX BOT READY", reply_markup=kb())
+    await update.message.reply_text("😈 ULTIMATE BOT READY", reply_markup=kb())
 
 
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
-
     q = update.callback_query
     await q.answer()
 
-    if q.data == "signal":
-        s, reason = generate_signal()
+    if q.data == "sig":
+        s, r = get_signal()
 
         if not s:
-            await q.message.reply_text(f"❌ {reason}")
+            await q.message.reply_text(f"❌ {r}")
             return
 
         msg = f"""
-🔥 СИЛЬНИЙ
+🔥 ULTIMATE
 
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
@@ -234,25 +241,22 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
         await q.message.reply_text(msg)
 
-
     elif q.data == "auto":
         AUTO = not AUTO
         await q.message.edit_text(f"🤖 AUTO: {AUTO}", reply_markup=kb())
 
 
-async def auto_job(context: ContextTypes.DEFAULT_TYPE):
-    global AUTO
-
+async def auto(context: ContextTypes.DEFAULT_TYPE):
     if not AUTO:
         return
 
-    s, _ = generate_signal()
+    s, _ = get_signal()
 
-    if not s or s["score"] < 6:
+    if not s or s["score"] < 5:
         return
 
     msg = f"""
-🔥 СИГНАЛ
+🔥 SIGNAL
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
@@ -271,9 +275,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(btn))
 
-    app.job_queue.run_repeating(auto_job, interval=60, first=10)
+    app.job_queue.run_repeating(auto, interval=60, first=10)
 
-    print("🚀 MAX PRECISION BOT STARTED")
+    print("😈 ULTIMATE BOT STARTED")
     app.run_polling()
 
 
