@@ -63,6 +63,19 @@ def rsi(d, p=14):
 def macd(d): return ema(d, 12) - ema(d, 26)
 
 
+# ================= VOLATILITY =================
+def market_strength(candles):
+    sizes = [abs(c["c"] - c["o"]) for c in candles[-20:]]
+    avg = sum(sizes) / len(sizes)
+
+    if avg < 0.0002:
+        return "LOW"
+    elif avg < 0.0005:
+        return "MEDIUM"
+    else:
+        return "HIGH"
+
+
 # ================= LEVELS =================
 def support_resistance(data):
     return min(data[-50:]), max(data[-50:])
@@ -86,9 +99,6 @@ def candle_pattern(c):
 
 # ================= LATE FILTER =================
 def is_late_entry(candles):
-    if len(candles) < 10:
-        return False
-
     last = candles[-1]
     body = abs(last["c"] - last["o"])
     full = last["h"] - last["l"]
@@ -114,6 +124,16 @@ def analyze_pair(pair):
     if is_late_entry(candles):
         return None, "Запізно заходити"
 
+    strength = market_strength(candles)
+
+    # 🔥 АДАПТАЦІЯ
+    if strength == "LOW":
+        min_score = 5
+    elif strength == "MEDIUM":
+        min_score = 6
+    else:
+        min_score = 7
+
     r = round(rsi(m1), 2)
     m = round(macd(m1), 5)
 
@@ -132,28 +152,21 @@ def analyze_pair(pair):
     if r < 40:
         score += 2
         direction = "BUY"
-
     if m > 0:
         score += 2
-
     if near_support:
         score += 2
-
     if pat == "BUY":
         score += 2
 
     # SELL
     sell_score = 0
-
     if r > 60:
         sell_score += 2
-
     if m < 0:
         sell_score += 2
-
     if near_resistance:
         sell_score += 2
-
     if pat == "SELL":
         sell_score += 2
 
@@ -161,11 +174,11 @@ def analyze_pair(pair):
         score = sell_score
         direction = "SELL"
 
-    if score < 6:
-        return None, "Слабкий сигнал"
+    if score < min_score:
+        return None, f"Слабкий ({strength})"
 
     prob = min(60 + score * 5, 95)
-    strength = "🔥 СИЛЬНИЙ" if score >= 8 else "⚠️ СЕРЕДНІЙ"
+    label = f"{strength}"
 
     return {
         "pair": pair,
@@ -175,14 +188,13 @@ def analyze_pair(pair):
         "rsi": r,
         "macd": m,
         "pattern": pat if pat else "нема",
-        "strength": strength
+        "strength": label
     }, None
 
 
 # ================= SIGNAL =================
 def generate_signal():
     best = None
-    reason = ""
     now = datetime.now().timestamp()
 
     for pair in PAIRS:
@@ -191,18 +203,16 @@ def generate_signal():
             continue
 
         try:
-            s, r = analyze_pair(pair)
+            s, _ = analyze_pair(pair)
         except:
             continue
 
         if s:
             if not best or s["prob"] > best["prob"]:
                 best = s
-        else:
-            reason = r
 
     if not best:
-        return None, reason
+        return None, "Нема умов"
 
     LAST_SIGNAL_TIME[best["pair"]] = now
 
@@ -219,7 +229,7 @@ def kb():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🚀 BOT READY", reply_markup=kb())
+    await update.message.reply_text("🚀 ADAPTIVE BOT READY", reply_markup=kb())
 
 
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -236,17 +246,17 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
-{s['strength']}
-
 📊 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 
 📊 {s['prob']}%
-📈 Сила: {s['score']}
+📈 Score: {s['score']}
 
 📉 RSI: {s['rsi']}
 📊 MACD: {s['macd']}
-🕯 Патерн: {s['pattern']}
+🕯 {s['pattern']}
+
+📌 Ринок: {s['strength']}
 """
         await q.message.reply_text(msg)
 
@@ -264,14 +274,18 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 
     s, _ = generate_signal()
 
-    if not s or s["strength"] != "🔥 СИЛЬНИЙ":
+    if not s:
+        return
+
+    # тільки норм сигнали
+    if s["score"] < 6:
         return
 
     msg = f"""
-🔥 СИЛЬНИЙ
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
+📌 {s['strength']}
 """
 
     for chat_id in CHAT_IDS:
@@ -289,7 +303,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 BALANCED BOT STARTED")
+    print("🚀 SAFE ADAPTIVE BOT STARTED")
     app.run_polling()
 
 
