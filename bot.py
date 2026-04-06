@@ -347,7 +347,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    app.job_queue.run_repeating(auto_signal, interval=300, first=10)
+    app.job_queue.run_repeating(auto_signal, interval=180, first=10)
 
     print("🔥 FINAL BOSS ULTRA RUNNING")
     app.run_polling()
