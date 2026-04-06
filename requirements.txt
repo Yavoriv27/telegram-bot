@@ -1,6 +1,5 @@
-numpy
-requests
-six
-python-telegram-bot[job-queue]
+python-telegram-bot==20.7
 oandapyV20
 python-dotenv
+yfinance
+pandas
