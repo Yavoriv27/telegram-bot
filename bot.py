@@ -107,25 +107,6 @@ def is_late_entry(candles):
     return False
 
 
-# ================= CONFIRMATION =================
-def confirm_entry(candles, direction):
-    if len(candles) < 3:
-        return False
-
-    last = candles[-1]
-    prev = candles[-2]
-
-    # BUY підтвердження
-    if direction == "BUY":
-        return last["c"] > last["o"] and last["c"] > prev["c"]
-
-    # SELL підтвердження
-    if direction == "SELL":
-        return last["c"] < last["o"] and last["c"] < prev["c"]
-
-    return False
-
-
 # ================= ANALYSIS =================
 def analyze_pair(pair):
     m1, candles = get_candles(pair, "M1")
@@ -141,47 +122,50 @@ def analyze_pair(pair):
 
     pat = candle_pattern(candles)
 
-    near_support = abs(price - support) < (resistance - support) * 0.2
-    near_resistance = abs(price - resistance) < (resistance - support) * 0.2
+    near_support = abs(price - support) < (resistance - support) * 0.25
+    near_resistance = abs(price - resistance) < (resistance - support) * 0.25
 
     score = 0
     direction = None
 
     # BUY
-    if r < 35:
+    if r < 40:
         score += 2
         direction = "BUY"
+
     if m > 0:
         score += 2
+
     if near_support:
-        score += 3
+        score += 2
+
     if pat == "BUY":
-        score += 3
+        score += 2
 
     # SELL
     sell_score = 0
-    if r > 65:
+
+    if r > 60:
         sell_score += 2
+
     if m < 0:
         sell_score += 2
+
     if near_resistance:
-        sell_score += 3
+        sell_score += 2
+
     if pat == "SELL":
-        sell_score += 3
+        sell_score += 2
 
     if sell_score > score:
         score = sell_score
         direction = "SELL"
 
-    if score < 7:
-        return None, "Нема розвороту"
+    if score < 6:
+        return None, "Слабкий сигнал"
 
-    # 🔥 НОВЕ: ЧЕКАЄМО ПІДТВЕРДЖЕННЯ
-    if not confirm_entry(candles, direction):
-        return None, "Чекаємо підтвердження"
-
-    prob = min(65 + score * 4, 95)
-    strength = "🔥 СИЛЬНИЙ" if score >= 9 else "⚠️ СЕРЕДНІЙ"
+    prob = min(60 + score * 5, 95)
+    strength = "🔥 СИЛЬНИЙ" if score >= 8 else "⚠️ СЕРЕДНІЙ"
 
     return {
         "pair": pair,
@@ -222,7 +206,7 @@ def generate_signal():
 
     LAST_SIGNAL_TIME[best["pair"]] = now
 
-    return best | {"entry": 1}, None
+    return best, None
 
 
 # ================= UI =================
@@ -263,8 +247,6 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📉 RSI: {s['rsi']}
 📊 MACD: {s['macd']}
 🕯 Патерн: {s['pattern']}
-
-⏱ Вхід: ПІСЛЯ ПІДТВЕРДЖЕННЯ
 """
         await q.message.reply_text(msg)
 
@@ -290,7 +272,6 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
 🏆 {s['pair']}
 {'🟢 BUY' if s['dir']=='BUY' else '🔴 SELL'}
 📊 {s['prob']}%
-⏱ ПІСЛЯ ПІДТВЕРДЖЕННЯ
 """
 
     for chat_id in CHAT_IDS:
@@ -308,7 +289,7 @@ def main():
 
     app.job_queue.run_repeating(auto_job, interval=60, first=10)
 
-    print("🚀 IDEAL ENTRY BOT STARTED")
+    print("🚀 BALANCED BOT STARTED")
     app.run_polling()
 
 
