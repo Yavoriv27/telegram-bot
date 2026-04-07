@@ -122,6 +122,8 @@ def candle_ai(c):
 def analyze(pair):
     c1 = get_candles(pair, "M1")
     c15 = get_candles(pair, "M15")
+    if not c1 or not c15:
+     return None
 
     if volatility(c1) < 0.0004:
         return None
@@ -162,8 +164,6 @@ def analyze(pair):
         "prob": min(score, 95),
         "score": score,
         "reasons": ", ".join(reasons)
-    if not c1 or not c15:
-    return None
     }
 
 # ================= UI =================
