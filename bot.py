@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 from datetime import datetime
@@ -28,20 +27,26 @@ COOLDOWN = 120  # антиспам
 # ================= DATA =================
 
 def get_candles(pair, tf, count=120):
-    params = {"granularity": tf, "count": count, "price": "M"}
-    r = instruments.InstrumentsCandles(instrument=pair, params=params)
-    client.request(r)
+    try:
+        params = {"granularity": tf, "count": count, "price": "M"}
+        r = instruments.InstrumentsCandles(instrument=pair, params=params)
+        client.request(r)
 
-    candles = []
-    for c in r.response["candles"]:
-        if c["complete"]:
-            candles.append({
-                "o": float(c["mid"]["o"]),
-                "c": float(c["mid"]["c"]),
-                "h": float(c["mid"]["h"]),
-                "l": float(c["mid"]["l"])
-            })
-    return candles
+        candles = []
+        for c in r.response["candles"]:
+            if c["complete"]:
+                candles.append({
+                    "o": float(c["mid"]["o"]),
+                    "c": float(c["mid"]["c"]),
+                    "h": float(c["mid"]["h"]),
+                    "l": float(c["mid"]["l"])
+                })
+
+        return candles
+
+    except Exception as e:
+        print("❌ OANDA ERROR:", e)
+        return []
 
 # ================= REAL VOLUME =================
 
