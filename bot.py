@@ -254,6 +254,7 @@ def main():
     app.add_handler(CallbackQueryHandler(buttons))
 
     async def on_start(app):
+        await asyncio.sleep(1)  # даємо боту повністю запуститись
         app.create_task(instant_loop(app))
 
     app.post_init = on_start
@@ -262,6 +263,9 @@ def main():
 
     app.run_polling(drop_pending_updates=True)
 
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
