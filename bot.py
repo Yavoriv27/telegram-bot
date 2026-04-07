@@ -260,7 +260,7 @@ def main():
 
     print("🔥 FINAL BOSS INSTANT RUNNING")
 
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
