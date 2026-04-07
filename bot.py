@@ -247,16 +247,19 @@ async def instant_loop(app):
 
 # ================= MAIN =================
 
-async def main():
+def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    asyncio.create_task(instant_loop(app))
+    # запускаємо instant loop правильно
+    app.create_task(instant_loop(app))
 
     print("🔥 FINAL BOSS INSTANT RUNNING")
-    await app.run_polling()
+
+    app.run_polling()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
