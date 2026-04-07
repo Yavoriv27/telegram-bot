@@ -253,8 +253,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    # запускаємо instant loop правильно
-    app.create_task(instant_loop(app))
+    async def on_start(app):
+        app.create_task(instant_loop(app))
+
+    app.post_init = on_start
 
     print("🔥 FINAL BOSS INSTANT RUNNING")
 
