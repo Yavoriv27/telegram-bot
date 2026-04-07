@@ -253,19 +253,16 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    async def on_start(app):
-        await asyncio.sleep(1)  # даємо боту повністю запуститись
-        app.create_task(instant_loop(app))
+    async def post_init(app):
+        # запускаємо loop вже після старту
+        asyncio.get_event_loop().create_task(instant_loop(app))
 
-    app.post_init = on_start
+    app.post_init = post_init
 
     print("🔥 FINAL BOSS INSTANT RUNNING")
 
     app.run_polling(drop_pending_updates=True)
 
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
