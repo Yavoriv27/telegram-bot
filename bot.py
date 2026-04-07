@@ -162,6 +162,8 @@ def analyze(pair):
         "prob": min(score, 95),
         "score": score,
         "reasons": ", ".join(reasons)
+    if not c1 or not c15:
+    return None
     }
 
 # ================= UI =================
@@ -248,7 +250,7 @@ async def instant_loop(app):
                     for chat_id in CHAT_IDS:
                         await app.bot.send_message(chat_id, msg)
 
-        await asyncio.sleep(20)
+        await asyncio.sleep(30)
 
 # ================= MAIN =================
 
