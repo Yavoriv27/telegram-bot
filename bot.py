@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os
 import asyncio
 from datetime import datetime
@@ -17,12 +19,13 @@ OANDA_KEY = os.getenv("OANDA_API_KEY")
 
 client = oandapyV20.API(access_token=OANDA_KEY)
 
-PAIRS = ["EUR_USD"]
+PAIR = "EUR_USD"
 CHAT_IDS = set()
 AUTO = True
 
 LAST_SIGNAL_TIME = {}
 COOLDOWN = 120
+
 
 # ================= DATA =================
 
@@ -45,53 +48,39 @@ def get_candles(pair, tf, count=120):
     except:
         return []
 
-# ================= AI CORE =================
 
-def strong_trend(c):
-    up = sum(1 for x in c[-5:] if x["c"] > x["o"])
-    down = sum(1 for x in c[-5:] if x["c"] < x["o"])
+# ================= INDICATORS =================
 
-    if up >= 4:
-        return "UP"
-    if down >= 4:
-        return "DOWN"
-    return "FLAT"
+def ema(c, period):
+    k = 2 / (period + 1)
+    ema_val = c[0]["c"]
+    for x in c:
+        ema_val = x["c"] * k + ema_val * (1 - k)
+    return ema_val
 
-def is_flat(c):
-    moves = [abs(x["c"] - x["o"]) for x in c[-10:]]
-    return sum(moves) / len(moves) < 0.0002
 
-def sniper_entry(c):
-    last = c[-1]
-    prev = c[-2]
-    prev2 = c[-3]
+def rsi(c, period=14):
+    gains, losses = [], []
 
-    if prev2["l"] < prev["l"] and prev["c"] > prev["o"]:
-        if last["c"] > last["o"] and last["c"] > prev["c"]:
-            return "BUY"
+    for i in range(1, len(c)):
+        diff = c[i]["c"] - c[i - 1]["c"]
+        if diff > 0:
+            gains.append(diff)
+        else:
+            losses.append(abs(diff))
 
-    if prev2["h"] > prev["h"] and prev["c"] < prev["o"]:
-        if last["c"] < last["o"] and last["c"] < prev["c"]:
-            return "SELL"
+    if len(gains) < period or len(losses) < period:
+        return 50
 
-    return None
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
 
-def candle_power(c):
-    last = c[-1]
-    body = abs(last["c"] - last["o"])
-    full = last["h"] - last["l"]
+    if avg_loss == 0:
+        return 100
 
-    if full == 0:
-        return None
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
-    strength = body / full
-
-    if last["c"] > last["o"] and strength > 0.6:
-        return "BUY"
-    if last["c"] < last["o"] and strength > 0.6:
-        return "SELL"
-
-    return None
 
 def get_volume():
     try:
@@ -101,7 +90,8 @@ def get_volume():
     except:
         return False
 
-# ================= ANALYZE =================
+
+# ================= CORE =================
 
 def analyze(pair):
     c1 = get_candles(pair, "M1")
@@ -110,42 +100,82 @@ def analyze(pair):
     if not c1 or not c15:
         return None
 
-    if is_flat(c1):
+    # EMA TREND
+    ema20 = ema(c15[-50:], 20)
+    ema50 = ema(c15[-50:], 50)
+
+    if ema20 > ema50:
+        direction = "BUY"
+    elif ema20 < ema50:
+        direction = "SELL"
+    else:
         return None
 
-    trend_dir = strong_trend(c15)
+    # RSI
+    r = rsi(c1)
 
-    if trend_dir == "FLAT":
-        return None
-
-    direction = "BUY" if trend_dir == "UP" else "SELL"
+    # PRICE ACTION (3 candles)
+    last3 = c1[-3:]
+    up = all(x["c"] > x["o"] for x in last3)
+    down = all(x["c"] < x["o"] for x in last3)
 
     score = 0
     reasons = []
 
-    sniper = sniper_entry(c1)
-    if sniper == direction:
-        score += 30
-        reasons.append("Sniper")
+    # EMA
+    score += 30
+    reasons.append("EMA")
 
-    cp = candle_power(c1)
-    if cp == direction:
-        score += 20
-        reasons.append("Candle")
+    # PA
+    if direction == "BUY" and up:
+        score += 25
+        reasons.append("PA")
+    elif direction == "SELL" and down:
+        score += 25
+        reasons.append("PA")
 
+    # Candle impulse
+    last = c1[-1]
+    body = abs(last["c"] - last["o"])
+    full = last["h"] - last["l"]
+
+    if full > 0:
+        power = body / full
+        if power > 0.6:
+            if (direction == "BUY" and last["c"] > last["o"]) or \
+               (direction == "SELL" and last["c"] < last["o"]):
+                score += 20
+                reasons.append("Impulse")
+
+    # RSI filter
+    if direction == "BUY" and r < 70:
+        score += 15
+        reasons.append("RSI")
+    elif direction == "SELL" and r > 30:
+        score += 15
+        reasons.append("RSI")
+
+    # Volume
     if get_volume():
-        score += 20
+        score += 10
         reasons.append("Volume")
 
-    if score < 70:
+    # LEVELS
+    if score >= 75:
+        level = "STRONG"
+    elif score >= 60:
+        level = "NORMAL"
+    else:
         return None
 
     return {
         "pair": pair,
         "dir": direction,
         "prob": min(score, 95),
+        "level": level,
         "reasons": ", ".join(reasons)
     }
+
 
 # ================= UI =================
 
@@ -155,9 +185,11 @@ def keyboard():
         [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
     ])
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 FINAL AI CORE", reply_markup=keyboard())
+    await update.message.reply_text("🔥 FINAL AI CORE v2", reply_markup=keyboard())
+
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -166,18 +198,19 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "signal":
-        s = analyze("EUR_USD")
+        s = analyze(PAIR)
 
         if not s:
             await q.edit_message_text("❌ Нема сигналу", reply_markup=keyboard())
             return
 
         msg = f"""
-🔥 FINAL AI CORE
+🔥 FINAL AI CORE v2
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
+⚡ {s['level']}
 📊 {s['prob']}%
 🧠 {s['reasons']}
 """
@@ -187,28 +220,31 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         AUTO = not AUTO
         await q.edit_message_text(f"🤖 AUTO: {AUTO}", reply_markup=keyboard())
 
-# ================= INSTANT =================
+
+# ================= AUTO =================
 
 async def instant_loop(app):
     while True:
         if AUTO:
             now = datetime.utcnow().timestamp()
 
-            last = LAST_SIGNAL_TIME.get("EUR_USD")
+            last = LAST_SIGNAL_TIME.get(PAIR)
             if last and now - last < COOLDOWN:
                 await asyncio.sleep(10)
                 continue
 
-            s = analyze("EUR_USD")
+            s = analyze(PAIR)
 
             if s:
-                LAST_SIGNAL_TIME["EUR_USD"] = now
+                LAST_SIGNAL_TIME[PAIR] = now
 
                 msg = f"""
-🚀 INSTANT SIGNAL
+🚀 SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
+
+⚡ {s['level']}
 📊 {s['prob']}%
 """
 
@@ -216,6 +252,7 @@ async def instant_loop(app):
                     await app.bot.send_message(chat_id, msg)
 
         await asyncio.sleep(30)
+
 
 # ================= MAIN =================
 
@@ -231,7 +268,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 FINAL AI CORE RUNNING")
+    print("🔥 FINAL AI CORE v2 RUNNING")
 
     app.run_polling(drop_pending_updates=True)
 
