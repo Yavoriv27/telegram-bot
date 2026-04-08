@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os
 import asyncio
 from datetime import datetime
@@ -17,12 +19,12 @@ OANDA_KEY = os.getenv("OANDA_API_KEY")
 
 client = oandapyV20.API(access_token=OANDA_KEY)
 
-PAIRS = ["EUR_USD", "GBP_USD", "USD_JPY"]
+PAIRS = ["EUR_USD"]
 CHAT_IDS = set()
 AUTO = True
 
 LAST_SIGNAL_TIME = {}
-COOLDOWN = 120  # антиспам
+COOLDOWN = 120
 
 # ================= DATA =================
 
@@ -41,128 +43,109 @@ def get_candles(pair, tf, count=120):
                     "h": float(c["mid"]["h"]),
                     "l": float(c["mid"]["l"])
                 })
-
         return candles
-
-    except Exception as e:
-        print("❌ OANDA ERROR:", e)
+    except:
         return []
 
-# ================= REAL VOLUME =================
+# ================= AI CORE =================
 
-def get_real_volume():
-    try:
-        data = yf.download("6E=F", interval="1m", period="1d", progress=False)
-        vols = data["Volume"].tail(10).tolist()
-        avg = sum(vols[:-1]) / (len(vols) - 1)
-        return vols[-1] > avg * 1.5
-    except:
-        return False
+def strong_trend(c):
+    up = sum(1 for x in c[-5:] if x["c"] > x["o"])
+    down = sum(1 for x in c[-5:] if x["c"] < x["o"])
 
-# ================= CORE =================
+    if up >= 4:
+        return "UP"
+    if down >= 4:
+        return "DOWN"
+    return "FLAT"
 
-def trend(data):
-    return "UP" if data[-1]["c"] > data[-10]["c"] else "DOWN"
+def is_flat(c):
+    moves = [abs(x["c"] - x["o"]) for x in c[-10:]]
+    return sum(moves) / len(moves) < 0.0002
 
-def volatility(c):
-    return sum(abs(x["h"] - x["l"]) for x in c[-10:]) / 10
-
-def liquidity_sweep(c):
-    last = c[-1]
-    prev_high = max(x["h"] for x in c[-10:-1])
-    prev_low = min(x["l"] for x in c[-10:-1])
-
-    if last["l"] < prev_low and last["c"] > prev_low:
-        return "BUY"
-    if last["h"] > prev_high and last["c"] < prev_high:
-        return "SELL"
-    return None
-
-def fake_breakout(c):
+def sniper_entry(c):
     last = c[-1]
     prev = c[-2]
+    prev2 = c[-3]
 
-    if last["h"] > prev["h"] and last["c"] < prev["h"]:
-        return "SELL"
-    if last["l"] < prev["l"] and last["c"] > prev["l"]:
-        return "BUY"
+    if prev2["l"] < prev["l"] and prev["c"] > prev["o"]:
+        if last["c"] > last["o"] and last["c"] > prev["c"]:
+            return "BUY"
+
+    if prev2["h"] > prev["h"] and prev["c"] < prev["o"]:
+        if last["c"] < last["o"] and last["c"] < prev["c"]:
+            return "SELL"
+
     return None
 
-def predict_move(c):
-    power = 0
-    for x in c[-5:]:
-        power += abs(x["c"] - x["o"]) if x["c"] > x["o"] else -abs(x["c"] - x["o"])
-
-    if power > 0.001:
-        return "BUY"
-    if power < -0.001:
-        return "SELL"
-    return "NEUTRAL"
-
-# ================= CANDLE AI =================
-
-def candle_ai(c):
+def candle_power(c):
     last = c[-1]
+    body = abs(last["c"] - last["o"])
     full = last["h"] - last["l"]
 
     if full == 0:
-        return "NEUTRAL", 0
+        return None
 
-    close_pos = (last["c"] - last["l"]) / full
+    strength = body / full
 
-    if close_pos > 0.7:
-        return "BUY", 2
-    elif close_pos < 0.3:
-        return "SELL", 2
+    if last["c"] > last["o"] and strength > 0.6:
+        return "BUY"
+    if last["c"] < last["o"] and strength > 0.6:
+        return "SELL"
 
-    return "NEUTRAL", 0
+    return None
+
+def get_volume():
+    try:
+        data = yf.download("6E=F", interval="1m", period="1d", progress=False)
+        vols = data["Volume"].tail(5).tolist()
+        return vols[-1] > sum(vols[:-1]) / len(vols[:-1])
+    except:
+        return False
 
 # ================= ANALYZE =================
 
 def analyze(pair):
     c1 = get_candles(pair, "M1")
     c15 = get_candles(pair, "M15")
+
     if not c1 or not c15:
         return None
 
-    if volatility(c1) < 0.0004:
+    if is_flat(c1):
         return None
 
-    direction = "BUY" if trend(c15) == "UP" else "SELL"
+    trend_dir = strong_trend(c15)
+
+    if trend_dir == "FLAT":
+        return None
+
+    direction = "BUY" if trend_dir == "UP" else "SELL"
 
     score = 0
     reasons = []
 
-    if liquidity_sweep(c1) == direction:
+    sniper = sniper_entry(c1)
+    if sniper == direction:
         score += 30
-        reasons.append("Liquidity")
+        reasons.append("Sniper")
 
-    if fake_breakout(c1) == direction:
+    cp = candle_power(c1)
+    if cp == direction:
         score += 20
-        reasons.append("Fake")
-
-    if get_real_volume():
-        score += 25
-        reasons.append("Volume")
-
-    if predict_move(c1) == direction:
-        score += 15
-        reasons.append("Momentum")
-
-    ai_dir, ai_score = candle_ai(c1)
-
-    if ai_dir == direction:
-        score += 10 + ai_score
         reasons.append("Candle")
 
-    if score < 60:
+    if get_volume():
+        score += 20
+        reasons.append("Volume")
+
+    if score < 70:
         return None
 
     return {
         "pair": pair,
         "dir": direction,
         "prob": min(score, 95),
-        "score": score,
         "reasons": ", ".join(reasons)
     }
 
@@ -176,11 +159,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-
-    await update.message.reply_text(
-        "🔥 FINAL BOSS INSTANT READY",
-        reply_markup=keyboard()
-    )
+    await update.message.reply_text("🔥 FINAL AI CORE", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -189,66 +168,54 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "signal":
-        s = get_best_signal()
+        s = analyze("EUR_USD")
 
         if not s:
             await q.edit_message_text("❌ Нема сигналу", reply_markup=keyboard())
             return
 
         msg = f"""
-🔥 FINAL BOSS
+🔥 FINAL AI CORE
 
-📊 {s['pair']}
+📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
 📊 {s['prob']}%
 🧠 {s['reasons']}
 """
-
         await q.edit_message_text(msg, reply_markup=keyboard())
 
     elif q.data == "auto":
         AUTO = not AUTO
         await q.edit_message_text(f"🤖 AUTO: {AUTO}", reply_markup=keyboard())
 
-# ================= SIGNAL =================
-
-def get_best_signal():
-    best = None
-    for pair in PAIRS:
-        s = analyze(pair)
-        if s:
-            if not best or s["prob"] > best["prob"]:
-                best = s
-    return best
-
-# ================= INSTANT LOOP =================
+# ================= INSTANT =================
 
 async def instant_loop(app):
     while True:
         if AUTO:
-            for pair in PAIRS:
-                now = datetime.utcnow().timestamp()
+            now = datetime.utcnow().timestamp()
 
-                last = LAST_SIGNAL_TIME.get(pair)
-                if last and now - last < COOLDOWN:
-                    continue
+            last = LAST_SIGNAL_TIME.get("EUR_USD")
+            if last and now - last < COOLDOWN:
+                await asyncio.sleep(10)
+                continue
 
-                s = analyze(pair)
+            s = analyze("EUR_USD")
 
-                if s:
-                    LAST_SIGNAL_TIME[pair] = now
+            if s:
+                LAST_SIGNAL_TIME["EUR_USD"] = now
 
-                    msg = f"""
+                msg = f"""
 🚀 INSTANT SIGNAL
 
-📊 {s['pair']}
+📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 📊 {s['prob']}%
 """
 
-                    for chat_id in CHAT_IDS:
-                        await app.bot.send_message(chat_id, msg)
+                for chat_id in CHAT_IDS:
+                    await app.bot.send_message(chat_id, msg)
 
         await asyncio.sleep(30)
 
@@ -261,12 +228,12 @@ def main():
     app.add_handler(CallbackQueryHandler(buttons))
 
     async def post_init(app):
-        # запускаємо loop вже після старту
+        await asyncio.sleep(1)
         asyncio.get_event_loop().create_task(instant_loop(app))
 
     app.post_init = post_init
 
-    print("🔥 FINAL BOSS INSTANT RUNNING")
+    print("🔥 FINAL AI CORE RUNNING")
 
     app.run_polling(drop_pending_updates=True)
 
