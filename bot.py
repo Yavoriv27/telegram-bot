@@ -82,6 +82,45 @@ def rsi(c, period=14):
     return 100 - (100 / (1 + rs))
 
 
+def atr(c, period=14):
+    trs = []
+    for i in range(1, len(c)):
+        high = c[i]["h"]
+        low = c[i]["l"]
+        prev_close = c[i-1]["c"]
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        trs.append(tr)
+
+    return sum(trs[-period:]) / period if len(trs) >= period else 0
+
+
+def support_resistance(c):
+    highs = [x["h"] for x in c[-20:]]
+    lows = [x["l"] for x in c[-20:]]
+
+    return max(highs), min(lows)
+
+
+def engulfing(c):
+    prev = c[-2]
+    last = c[-1]
+
+    if prev["c"] < prev["o"] and last["c"] > last["o"]:
+        if last["c"] > prev["o"] and last["o"] < prev["c"]:
+            return "BUY"
+
+    if prev["c"] > prev["o"] and last["c"] < last["o"]:
+        if last["c"] < prev["o"] and last["o"] > prev["c"]:
+            return "SELL"
+
+    return None
+
+
 def get_volume():
     try:
         data = yf.download("6E=F", interval="1m", period="1d", progress=False)
@@ -95,9 +134,10 @@ def get_volume():
 
 def analyze(pair):
     c1 = get_candles(pair, "M1")
+    c5 = get_candles(pair, "M5")
     c15 = get_candles(pair, "M15")
 
-    if not c1 or not c15:
+    if not c1 or not c5 or not c15:
         return None
 
     # EMA TREND
@@ -111,59 +151,74 @@ def analyze(pair):
     else:
         return None
 
+    # ATR
+    volatility = atr(c1)
+    if volatility < 0.00015:
+        return None
+
     # RSI
     r = rsi(c1)
 
-    # PRICE ACTION (3 candles)
+    # LEVELS
+    resistance, support = support_resistance(c15)
+    price = c1[-1]["c"]
+
+    if abs(price - resistance) < 0.0003 or abs(price - support) < 0.0003:
+        return None
+
+    # PRICE ACTION
     last3 = c1[-3:]
     up = all(x["c"] > x["o"] for x in last3)
     down = all(x["c"] < x["o"] for x in last3)
 
+    # M5 confirm
+    m5_last = c5[-1]
+    m5_dir = "BUY" if m5_last["c"] > m5_last["o"] else "SELL"
+
     score = 0
     reasons = []
 
-    # EMA
     score += 30
     reasons.append("EMA")
 
-    # PA
     if direction == "BUY" and up:
-        score += 25
+        score += 20
         reasons.append("PA")
     elif direction == "SELL" and down:
-        score += 25
+        score += 20
         reasons.append("PA")
 
-    # Candle impulse
+    if m5_dir == direction:
+        score += 15
+        reasons.append("M5")
+
+    eng = engulfing(c1)
+    if eng == direction:
+        score += 20
+        reasons.append("Pattern")
+
+    if direction == "BUY" and r < 70:
+        score += 10
+        reasons.append("RSI")
+    elif direction == "SELL" and r > 30:
+        score += 10
+        reasons.append("RSI")
+
     last = c1[-1]
     body = abs(last["c"] - last["o"])
     full = last["h"] - last["l"]
 
-    if full > 0:
-        power = body / full
-        if power > 0.6:
-            if (direction == "BUY" and last["c"] > last["o"]) or \
-               (direction == "SELL" and last["c"] < last["o"]):
-                score += 20
-                reasons.append("Impulse")
+    if full > 0 and body / full > 0.6:
+        score += 10
+        reasons.append("Impulse")
 
-    # RSI filter
-    if direction == "BUY" and r < 70:
-        score += 15
-        reasons.append("RSI")
-    elif direction == "SELL" and r > 30:
-        score += 15
-        reasons.append("RSI")
-
-    # Volume
     if get_volume():
         score += 10
         reasons.append("Volume")
 
-    # LEVELS
-    if score >= 75:
+    if score >= 80:
         level = "STRONG"
-    elif score >= 60:
+    elif score >= 65:
         level = "NORMAL"
     else:
         return None
@@ -188,7 +243,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 FINAL AI CORE v2", reply_markup=keyboard())
+    await update.message.reply_text("🔥 FINAL AI CORE v3", reply_markup=keyboard())
 
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -205,7 +260,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
-🔥 FINAL AI CORE v2
+🔥 FINAL AI CORE v3
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
@@ -268,7 +323,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 FINAL AI CORE v2 RUNNING")
+    print("🔥 FINAL AI CORE v3 RUNNING")
 
     app.run_polling(drop_pending_updates=True)
 
