@@ -23,13 +23,7 @@ CHAT_IDS = set()
 AUTO = True
 
 LAST_DIRECTION = None
-LAST_SIGNAL_TIME = {}
-
-STATS = {"win": 0, "loss": 0}
 HISTORY = []
-
-COOLDOWN = 600
-
 
 # ================= DATA =================
 
@@ -39,71 +33,81 @@ def get_candles(pair, tf, count=120):
         r = instruments.InstrumentsCandles(instrument=pair, params=params)
         client.request(r)
 
-        candles = []
-        for c in r.response["candles"]:
-            if c["complete"]:
-                candles.append({
-                    "o": float(c["mid"]["o"]),
-                    "c": float(c["mid"]["c"]),
-                    "h": float(c["mid"]["h"]),
-                    "l": float(c["mid"]["l"])
-                })
-        return candles
+        return [{
+            "o": float(c["mid"]["o"]),
+            "c": float(c["mid"]["c"]),
+            "h": float(c["mid"]["h"]),
+            "l": float(c["mid"]["l"])
+        } for c in r.response["candles"] if c["complete"]]
     except:
         return []
 
-
 # ================= INDICATORS =================
 
-def ema(c, period):
-    k = 2 / (period + 1)
-    ema_val = c[0]["c"]
+def ema(c, p):
+    k = 2 / (p + 1)
+    e = c[0]["c"]
     for x in c:
-        ema_val = x["c"] * k + ema_val * (1 - k)
-    return ema_val
-
+        e = x["c"] * k + e * (1 - k)
+    return e
 
 def atr(c):
-    trs = []
-    for i in range(1, len(c)):
-        tr = max(
-            c[i]["h"] - c[i]["l"],
-            abs(c[i]["h"] - c[i-1]["c"]),
-            abs(c[i]["l"] - c[i-1]["c"])
-        )
-        trs.append(tr)
-    return sum(trs[-14:]) / 14 if len(trs) >= 14 else 0
-
+    return sum(abs(c[i]["h"] - c[i]["l"]) for i in range(-14, -1)) / 14
 
 def candle_strength(c):
-    last = c[-1]
-    body = abs(last["c"] - last["o"])
-    full = last["h"] - last["l"]
-    return body / full if full > 0 else 0
+    l = c[-1]
+    return abs(l["c"] - l["o"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0
 
-
-def candle_position(c):
-    last = c[-1]
-    full = last["h"] - last["l"]
-    return (last["c"] - last["l"]) / full if full > 0 else 0.5
-
-
-def support_resistance(c):
-    highs = [x["h"] for x in c[-20:]]
-    lows = [x["l"] for x in c[-20:]]
-    return max(highs), min(lows)
-
+def candle_pos(c):
+    l = c[-1]
+    return (l["c"] - l["l"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0.5
 
 def structure(c):
-    highs = [x["h"] for x in c[-5:]]
-    lows = [x["l"] for x in c[-5:]]
-
-    if highs[-1] > highs[-2] and lows[-1] > lows[-2]:
+    if c[-1]["h"] > c[-2]["h"] and c[-1]["l"] > c[-2]["l"]:
         return "UP"
-    if highs[-1] < highs[-2] and lows[-1] < lows[-2]:
+    if c[-1]["h"] < c[-2]["h"] and c[-1]["l"] < c[-2]["l"]:
         return "DOWN"
     return "RANGE"
 
+# ================= AI SCORE =================
+
+def ai_score(direction, c1, c5, c15):
+    score = 0
+
+    # Trend
+    e20 = ema(c15[-50:], 20)
+    e50 = ema(c15[-50:], 50)
+    if (e20 > e50 and direction == "BUY") or (e20 < e50 and direction == "SELL"):
+        score += 25
+
+    # Structure
+    if structure(c15) == ("UP" if direction == "BUY" else "DOWN"):
+        score += 20
+
+    # Strength
+    if candle_strength(c1) > 0.6:
+        score += 15
+
+    # Position
+    pos = candle_pos(c1)
+    if (direction == "BUY" and pos > 0.7) or (direction == "SELL" and pos < 0.3):
+        score += 15
+
+    # M5
+    m5 = c5[-1]
+    if ("BUY" if m5["c"] > m5["o"] else "SELL") == direction:
+        score += 15
+
+    # Anti overheat
+    last5 = c1[-5:]
+    if not (all(x["c"] > x["o"] for x in last5) or all(x["c"] < x["o"] for x in last5)):
+        score += 10
+
+    # Adaptation
+    if HISTORY[-3:].count("loss") >= 2:
+        score -= 15
+
+    return max(0, min(score, 100))
 
 # ================= CORE =================
 
@@ -117,77 +121,25 @@ def analyze(pair):
     if not c1 or not c5 or not c15:
         return None
 
-    # === TREND
-    ema20 = ema(c15[-50:], 20)
-    ema50 = ema(c15[-50:], 50)
+    direction = "BUY" if c15[-1]["c"] > c15[-1]["o"] else "SELL"
 
-    if ema20 > ema50:
-        direction = "BUY"
-    elif ema20 < ema50:
-        direction = "SELL"
-    else:
-        return None
-
-    # === STRUCTURE
-    if structure(c15) != ("UP" if direction == "BUY" else "DOWN"):
-        return None
-
-    # === VOLATILITY
-    if atr(c1) < 0.00015:
-        return None
-
-    # === OVERHEAT FILTER
-    last5 = c1[-5:]
-    if all(x["c"] > x["o"] for x in last5) or all(x["c"] < x["o"] for x in last5):
-        return None
-
-    # === LEVELS
-    resistance, support = support_resistance(c15)
-    price = c1[-1]["c"]
-
-    if abs(price - resistance) < 0.00025 or abs(price - support) < 0.00025:
-        return None
-
-    # === ANTI DUPLICATE
     if LAST_DIRECTION == direction:
         return None
 
-    # === PULLBACK ENTRY
-    prev = c1[-2]
-    last = c1[-1]
+    score = ai_score(direction, c1, c5, c15)
 
-    if direction == "BUY":
-        if not (prev["c"] < prev["o"] and last["c"] > last["o"]):
-            return None
-    if direction == "SELL":
-        if not (prev["c"] > prev["o"] and last["c"] < last["o"]):
-            return None
-
-    # === CANDLE QUALITY
-    strength = candle_strength(c1)
-    pos = candle_position(c1)
-
-    if direction == "BUY":
-        if strength < 0.6 or pos < 0.7:
-            return None
-    else:
-        if strength < 0.6 or pos > 0.3:
-            return None
-
-    # === M5 CONFIRM
-    m5 = c5[-1]
-    if ("BUY" if m5["c"] > m5["o"] else "SELL") != direction:
+    if score < 60:
         return None
+
+    level = "GOOD" if score >= 75 else "MEDIUM"
 
     LAST_DIRECTION = direction
 
     return {
         "dir": direction,
-        "level": "PRO",
-        "prob": 85,
-        "bet": "10%" if len(HISTORY) < 3 or HISTORY[-1] == "win" else "5%"
+        "score": score,
+        "level": level
     }
-
 
 # ================= UI =================
 
@@ -198,15 +150,12 @@ def keyboard():
         [
             InlineKeyboardButton("✅", callback_data="win"),
             InlineKeyboardButton("❌", callback_data="loss")
-        ],
-        [InlineKeyboardButton("📊 Статистика", callback_data="stats")]
+        ]
     ])
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 AI CORE v5 SYSTEM", reply_markup=keyboard())
-
+    await update.message.reply_text("🤖 AI v6 HYBRID", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -218,49 +167,31 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s = analyze(PAIR)
 
         if not s:
-            await q.edit_message_text("❌ Нема сигналу", reply_markup=keyboard())
+            await q.edit_message_text("❌ SKIP", reply_markup=keyboard())
             return
 
         msg = f"""
-🚀 PRO SIGNAL
+🤖 AI SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
+🧠 AI: {s['score']}%
 ⚡ {s['level']}
-📊 {s['prob']}%
-💰 Ставка: {s['bet']}
 """
         await q.edit_message_text(msg, reply_markup=keyboard())
 
     elif q.data == "auto":
         AUTO = not AUTO
-        await q.edit_message_text(f"🤖 AUTO: {AUTO}", reply_markup=keyboard())
+        await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
 
     elif q.data == "win":
-        STATS["win"] += 1
         HISTORY.append("win")
         await q.answer("+")
 
     elif q.data == "loss":
-        STATS["loss"] += 1
         HISTORY.append("loss")
         await q.answer("-")
-
-    elif q.data == "stats":
-        total = STATS["win"] + STATS["loss"]
-        wr = (STATS["win"]/total*100) if total else 0
-
-        msg = f"""
-📊 СТАТИСТИКА
-
-Угод: {total}
-✅ {STATS['win']}
-❌ {STATS['loss']}
-📈 Winrate: {round(wr,1)}%
-"""
-        await q.edit_message_text(msg, reply_markup=keyboard())
-
 
 # ================= AUTO =================
 
@@ -270,20 +201,18 @@ async def loop(app):
             s = analyze(PAIR)
             if s:
                 msg = f"""
-🚀 PRO SIGNAL
+🤖 AI SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
+🧠 {s['score']}%
 ⚡ {s['level']}
-📊 {s['prob']}%
-💰 {s['bet']}
 """
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id, msg)
 
         await asyncio.sleep(30)
-
 
 # ================= MAIN =================
 
@@ -298,10 +227,9 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 V5 SYSTEM RUNNING")
+    print("🤖 AI v6 RUNNING")
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
