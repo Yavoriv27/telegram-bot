@@ -10,7 +10,6 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 import oandapyV20
 from oandapyV20.endpoints import instruments
-import yfinance as yf
 
 load_dotenv()
 
@@ -23,8 +22,13 @@ PAIR = "EUR_USD"
 CHAT_IDS = set()
 AUTO = True
 
+LAST_DIRECTION = None
 LAST_SIGNAL_TIME = {}
-COOLDOWN = 120
+
+STATS = {"win": 0, "loss": 0}
+HISTORY = []
+
+COOLDOWN = 600
 
 
 # ================= DATA =================
@@ -59,80 +63,53 @@ def ema(c, period):
     return ema_val
 
 
-def rsi(c, period=14):
-    gains, losses = [], []
-
-    for i in range(1, len(c)):
-        diff = c[i]["c"] - c[i - 1]["c"]
-        if diff > 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
-
-    if len(gains) < period or len(losses) < period:
-        return 50
-
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-
-    if avg_loss == 0:
-        return 100
-
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
-def atr(c, period=14):
+def atr(c):
     trs = []
     for i in range(1, len(c)):
-        high = c[i]["h"]
-        low = c[i]["l"]
-        prev_close = c[i-1]["c"]
-
         tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
+            c[i]["h"] - c[i]["l"],
+            abs(c[i]["h"] - c[i-1]["c"]),
+            abs(c[i]["l"] - c[i-1]["c"])
         )
         trs.append(tr)
+    return sum(trs[-14:]) / 14 if len(trs) >= 14 else 0
 
-    return sum(trs[-period:]) / period if len(trs) >= period else 0
+
+def candle_strength(c):
+    last = c[-1]
+    body = abs(last["c"] - last["o"])
+    full = last["h"] - last["l"]
+    return body / full if full > 0 else 0
+
+
+def candle_position(c):
+    last = c[-1]
+    full = last["h"] - last["l"]
+    return (last["c"] - last["l"]) / full if full > 0 else 0.5
 
 
 def support_resistance(c):
     highs = [x["h"] for x in c[-20:]]
     lows = [x["l"] for x in c[-20:]]
-
     return max(highs), min(lows)
 
 
-def engulfing(c):
-    prev = c[-2]
-    last = c[-1]
+def structure(c):
+    highs = [x["h"] for x in c[-5:]]
+    lows = [x["l"] for x in c[-5:]]
 
-    if prev["c"] < prev["o"] and last["c"] > last["o"]:
-        if last["c"] > prev["o"] and last["o"] < prev["c"]:
-            return "BUY"
-
-    if prev["c"] > prev["o"] and last["c"] < last["o"]:
-        if last["c"] < prev["o"] and last["o"] > prev["c"]:
-            return "SELL"
-
-    return None
-
-
-def get_volume():
-    try:
-        data = yf.download("6E=F", interval="1m", period="1d", progress=False)
-        vols = data["Volume"].tail(5).tolist()
-        return vols[-1] > sum(vols[:-1]) / len(vols[:-1])
-    except:
-        return False
+    if highs[-1] > highs[-2] and lows[-1] > lows[-2]:
+        return "UP"
+    if highs[-1] < highs[-2] and lows[-1] < lows[-2]:
+        return "DOWN"
+    return "RANGE"
 
 
 # ================= CORE =================
 
 def analyze(pair):
+    global LAST_DIRECTION
+
     c1 = get_candles(pair, "M1")
     c5 = get_candles(pair, "M5")
     c15 = get_candles(pair, "M15")
@@ -140,7 +117,7 @@ def analyze(pair):
     if not c1 or not c5 or not c15:
         return None
 
-    # EMA TREND
+    # === TREND
     ema20 = ema(c15[-50:], 20)
     ema50 = ema(c15[-50:], 50)
 
@@ -151,84 +128,64 @@ def analyze(pair):
     else:
         return None
 
-    # ATR
-    volatility = atr(c1)
-    if volatility < 0.00015:
+    # === STRUCTURE
+    if structure(c15) != ("UP" if direction == "BUY" else "DOWN"):
         return None
 
-    # RSI
-    r = rsi(c1)
+    # === VOLATILITY
+    if atr(c1) < 0.00015:
+        return None
 
-    # LEVELS
+    # === OVERHEAT FILTER
+    last5 = c1[-5:]
+    if all(x["c"] > x["o"] for x in last5) or all(x["c"] < x["o"] for x in last5):
+        return None
+
+    # === LEVELS
     resistance, support = support_resistance(c15)
     price = c1[-1]["c"]
 
-    if abs(price - resistance) < 0.0003 or abs(price - support) < 0.0003:
+    if abs(price - resistance) < 0.00025 or abs(price - support) < 0.00025:
         return None
 
-    # PRICE ACTION
-    last3 = c1[-3:]
-    up = all(x["c"] > x["o"] for x in last3)
-    down = all(x["c"] < x["o"] for x in last3)
+    # === ANTI DUPLICATE
+    if LAST_DIRECTION == direction:
+        return None
 
-    # M5 confirm
-    m5_last = c5[-1]
-    m5_dir = "BUY" if m5_last["c"] > m5_last["o"] else "SELL"
-
-    score = 0
-    reasons = []
-
-    score += 30
-    reasons.append("EMA")
-
-    if direction == "BUY" and up:
-        score += 20
-        reasons.append("PA")
-    elif direction == "SELL" and down:
-        score += 20
-        reasons.append("PA")
-
-    if m5_dir == direction:
-        score += 15
-        reasons.append("M5")
-
-    eng = engulfing(c1)
-    if eng == direction:
-        score += 20
-        reasons.append("Pattern")
-
-    if direction == "BUY" and r < 70:
-        score += 10
-        reasons.append("RSI")
-    elif direction == "SELL" and r > 30:
-        score += 10
-        reasons.append("RSI")
-
+    # === PULLBACK ENTRY
+    prev = c1[-2]
     last = c1[-1]
-    body = abs(last["c"] - last["o"])
-    full = last["h"] - last["l"]
 
-    if full > 0 and body / full > 0.6:
-        score += 10
-        reasons.append("Impulse")
+    if direction == "BUY":
+        if not (prev["c"] < prev["o"] and last["c"] > last["o"]):
+            return None
+    if direction == "SELL":
+        if not (prev["c"] > prev["o"] and last["c"] < last["o"]):
+            return None
 
-    if get_volume():
-        score += 10
-        reasons.append("Volume")
+    # === CANDLE QUALITY
+    strength = candle_strength(c1)
+    pos = candle_position(c1)
 
-    if score >= 80:
-        level = "STRONG"
-    elif score >= 65:
-        level = "NORMAL"
+    if direction == "BUY":
+        if strength < 0.6 or pos < 0.7:
+            return None
     else:
+        if strength < 0.6 or pos > 0.3:
+            return None
+
+    # === M5 CONFIRM
+    m5 = c5[-1]
+    if ("BUY" if m5["c"] > m5["o"] else "SELL") != direction:
         return None
+
+    LAST_DIRECTION = direction
 
     return {
-        "pair": pair,
         "dir": direction,
-        "prob": min(score, 95),
-        "level": level,
-        "reasons": ", ".join(reasons)
+        "level": "PRO",
+        "prob": 85,
+        "bet": "10%" if len(HISTORY) < 3 or HISTORY[-1] == "win" else "5%"
     }
 
 
@@ -237,13 +194,18 @@ def analyze(pair):
 def keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")]
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
+        [
+            InlineKeyboardButton("✅", callback_data="win"),
+            InlineKeyboardButton("❌", callback_data="loss")
+        ],
+        [InlineKeyboardButton("📊 Статистика", callback_data="stats")]
     ])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 FINAL AI CORE v3", reply_markup=keyboard())
+    await update.message.reply_text("🔥 AI CORE v5 SYSTEM", reply_markup=keyboard())
 
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,14 +222,14 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
-🔥 FINAL AI CORE v3
+🚀 PRO SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
 ⚡ {s['level']}
 📊 {s['prob']}%
-🧠 {s['reasons']}
+💰 Ставка: {s['bet']}
 """
         await q.edit_message_text(msg, reply_markup=keyboard())
 
@@ -275,34 +237,48 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         AUTO = not AUTO
         await q.edit_message_text(f"🤖 AUTO: {AUTO}", reply_markup=keyboard())
 
+    elif q.data == "win":
+        STATS["win"] += 1
+        HISTORY.append("win")
+        await q.answer("+")
+
+    elif q.data == "loss":
+        STATS["loss"] += 1
+        HISTORY.append("loss")
+        await q.answer("-")
+
+    elif q.data == "stats":
+        total = STATS["win"] + STATS["loss"]
+        wr = (STATS["win"]/total*100) if total else 0
+
+        msg = f"""
+📊 СТАТИСТИКА
+
+Угод: {total}
+✅ {STATS['win']}
+❌ {STATS['loss']}
+📈 Winrate: {round(wr,1)}%
+"""
+        await q.edit_message_text(msg, reply_markup=keyboard())
+
 
 # ================= AUTO =================
 
-async def instant_loop(app):
+async def loop(app):
     while True:
         if AUTO:
-            now = datetime.utcnow().timestamp()
-
-            last = LAST_SIGNAL_TIME.get(PAIR)
-            if last and now - last < COOLDOWN:
-                await asyncio.sleep(10)
-                continue
-
             s = analyze(PAIR)
-
             if s:
-                LAST_SIGNAL_TIME[PAIR] = now
-
                 msg = f"""
-🚀 SIGNAL
+🚀 PRO SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
 ⚡ {s['level']}
 📊 {s['prob']}%
+💰 {s['bet']}
 """
-
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id, msg)
 
@@ -318,14 +294,13 @@ def main():
     app.add_handler(CallbackQueryHandler(buttons))
 
     async def post_init(app):
-        await asyncio.sleep(1)
-        asyncio.get_event_loop().create_task(instant_loop(app))
+        asyncio.get_event_loop().create_task(loop(app))
 
     app.post_init = post_init
 
-    print("🔥 FINAL AI CORE v3 RUNNING")
+    print("🔥 V5 SYSTEM RUNNING")
 
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
 
 
 if __name__ == "__main__":
