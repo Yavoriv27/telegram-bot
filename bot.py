@@ -199,13 +199,12 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(msg, reply_markup=keyboard())
         except Exception:
             pass
-
-    elif q.data=="auto":
-        AUTO=not AUTO
-        try:
-    await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
-except Exception:
-    pass
+elif q.data == "auto":
+    AUTO = not AUTO
+    try:
+        await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
+    except Exception:
+        pass
 
     elif q.data=="win":
         HISTORY.append("win")
