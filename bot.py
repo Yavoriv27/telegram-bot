@@ -196,9 +196,9 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 ⚡ {s['level']}
 """
         try:
-    await q.edit_message_text(msg, reply_markup=keyboard())
-except Exception:
-    pass
+            await q.edit_message_text(msg, reply_markup=keyboard())
+        except Exception:
+            pass
 
     elif q.data=="auto":
         AUTO=not AUTO
