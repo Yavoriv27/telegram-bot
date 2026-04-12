@@ -183,7 +183,7 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
         s=analyze()
 
         if not s:
-            await q.edit_message_text("❌ SKIP",reply_markup=keyboard())
+            essage_text("❌ SKIP",reply_markup=keyboard())
             return
 
         msg=f"""
@@ -195,11 +195,17 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 🧠 AI: {s['score']}%
 ⚡ {s['level']}
 """
-        await q.edit_message_text(msg,reply_markup=keyboard())
+        try:
+    await q.edit_message_text(msg, reply_markup=keyboard())
+except Exception:
+    pass
 
     elif q.data=="auto":
         AUTO=not AUTO
-        await q.edit_message_text(f"AUTO: {AUTO}",reply_markup=keyboard())
+        try:
+    await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
+except Exception:
+    pass
 
     elif q.data=="win":
         HISTORY.append("win")
