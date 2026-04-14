@@ -125,6 +125,24 @@ def analyze():
     if LAST_DIRECTION == direction:
         return None
 
+    # 🔥 флет
+    if atr(c1) < 0.00012:
+        return None
+
+    # 🔥 мінімальний рух
+    if abs(c1[-1]["c"] - c1[-1]["o"]) < 0.00005:
+        return None
+
+    # 🔥 сильна свічка
+    if strength(c1) < 0.5:
+        return None
+
+    # 🔥 анти кінець руху
+    last3 = c1[-3:]
+    if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
+        return None
+
+    # рівні
     r, s = levels(c15)
     price = c1[-1]["c"]
 
@@ -141,10 +159,11 @@ def analyze():
 
     score = ai_score(direction, c1, c5, c15)
 
-    if score < 65:
+    # 🔥 тільки топ сигнали
+    if score < 85:
         return None
 
-    level = "GOOD" if score >= 75 else "MEDIUM"
+    level = "GOOD"
 
     LAST_DIRECTION = direction
 
@@ -164,7 +183,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V7 PRO SYSTEM", reply_markup=keyboard())
+    await update.message.reply_text("🔥 V7.2 TOP BOT", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -178,7 +197,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not s:
             try:
                 await q.edit_message_text("❌ SKIP", reply_markup=keyboard())
-            except Exception:
+            except:
                 pass
             return
 
@@ -188,20 +207,20 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-🧠 AI: {s['score']}%
+🧠 {s['score']}%
 ⚡ {s['level']}
 """
 
         try:
             await q.edit_message_text(msg, reply_markup=keyboard())
-        except Exception:
+        except:
             pass
 
     elif q.data == "auto":
         AUTO = not AUTO
         try:
             await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
-        except Exception:
+        except:
             pass
 
     elif q.data == "win":
@@ -246,7 +265,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 V7 RUNNING")
+    print("🔥 V7.2 RUNNING")
 
     app.run_polling()
 
