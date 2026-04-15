@@ -125,21 +125,34 @@ def analyze():
     if LAST_DIRECTION == direction:
         return None
 
-    # 🔥 флет
+    # флет
     if atr(c1) < 0.00012:
         return None
 
-    # 🔥 мінімальний рух
+    # мінімальний рух
     if abs(c1[-1]["c"] - c1[-1]["o"]) < 0.00005:
         return None
 
-    # 🔥 сильна свічка
-    if strength(c1) < 0.5:
+    # сильна свічка
+    if strength(c1) < 0.6:
         return None
 
-    # 🔥 анти кінець руху
+    # анти кінець руху
     last3 = c1[-3:]
     if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
+        return None
+
+    # 🔥 ПРОБОЙ (НОВЕ)
+    if direction == "BUY" and c1[-1]["c"] <= c1[-2]["h"]:
+        return None
+    if direction == "SELL" and c1[-1]["c"] >= c1[-2]["l"]:
+        return None
+
+    # 🔥 ПОЗИЦІЯ (НОВЕ)
+    pos = position(c1)
+    if direction == "BUY" and pos < 0.6:
+        return None
+    if direction == "SELL" and pos > 0.4:
         return None
 
     # рівні
@@ -159,15 +172,12 @@ def analyze():
 
     score = ai_score(direction, c1, c5, c15)
 
-    # 🔥 тільки топ сигнали
     if score < 85:
         return None
 
-    level = "GOOD"
-
     LAST_DIRECTION = direction
 
-    return {"dir": direction, "score": score, "level": level}
+    return {"dir": direction, "score": score, "level": "GOOD"}
 
 # ================= UI =================
 
@@ -183,7 +193,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V7.2 TOP BOT", reply_markup=keyboard())
+    await update.message.reply_text("🔥 V7.3 PRO BOT", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -208,7 +218,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
 🧠 {s['score']}%
-⚡ {s['level']}
+⚡ GOOD
 """
 
         try:
@@ -245,7 +255,7 @@ async def loop(app):
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
 🧠 {s['score']}%
-⚡ {s['level']}
+⚡ GOOD
 """
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id, msg)
@@ -265,7 +275,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 V7.2 RUNNING")
+    print("🔥 V7.3 RUNNING")
 
     app.run_polling()
 
