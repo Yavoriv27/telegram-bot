@@ -74,6 +74,26 @@ def levels(c):
     lows = [x["l"] for x in c[-20:]]
     return max(highs), min(lows)
 
+# ================= ENTRY =================
+
+def entry_ok(direction, c1):
+    prev = c1[-2]
+    last = c1[-1]
+
+    if direction == "BUY":
+        if not (prev["c"] < prev["o"] and last["c"] > last["o"]):
+            return False
+        if last["c"] - last["l"] < (last["h"] - last["l"]) * 0.6:
+            return False
+
+    if direction == "SELL":
+        if not (prev["c"] > prev["o"] and last["c"] < last["o"]):
+            return False
+        if last["h"] - last["c"] < (last["h"] - last["l"]) * 0.6:
+            return False
+
+    return True
+
 # ================= AI =================
 
 def ai_score(direction, c1, c5, c15):
@@ -125,49 +145,27 @@ def analyze():
     if LAST_DIRECTION == direction:
         return None
 
-    # флет
     if atr(c1) < 0.00012:
         return None
 
-    # мінімальний рух
     if abs(c1[-1]["c"] - c1[-1]["o"]) < 0.00005:
         return None
 
-    # сильна свічка
     if strength(c1) < 0.6:
         return None
 
-    # анти кінець руху
     last3 = c1[-3:]
     if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
         return None
 
-    # 🔥 ПРОБОЙ (НОВЕ)
-    if direction == "BUY" and c1[-1]["c"] <= c1[-2]["h"]:
-        return None
-    if direction == "SELL" and c1[-1]["c"] >= c1[-2]["l"]:
+    # 🔥 ENTRY ЛОГІКА
+    if not entry_ok(direction, c1):
         return None
 
-    # 🔥 ПОЗИЦІЯ (НОВЕ)
-    pos = position(c1)
-    if direction == "BUY" and pos < 0.6:
-        return None
-    if direction == "SELL" and pos > 0.4:
-        return None
-
-    # рівні
     r, s = levels(c15)
     price = c1[-1]["c"]
 
     if abs(price - r) < 0.00025 or abs(price - s) < 0.00025:
-        return None
-
-    prev = c1[-2]
-    last = c1[-1]
-
-    if direction == "BUY" and not (prev["c"] < prev["o"] and last["c"] > last["o"]):
-        return None
-    if direction == "SELL" and not (prev["c"] > prev["o"] and last["c"] < last["o"]):
         return None
 
     score = ai_score(direction, c1, c5, c15)
@@ -193,7 +191,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V7.3 PRO BOT", reply_markup=keyboard())
+    await update.message.reply_text("🔥 V7.4 ENTRY BOT", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -260,7 +258,7 @@ async def loop(app):
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id, msg)
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(20)
 
 # ================= MAIN =================
 
@@ -275,7 +273,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 V7.3 RUNNING")
+    print("🔥 V7.4 RUNNING")
 
     app.run_polling()
 
