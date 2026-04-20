@@ -58,10 +58,6 @@ def strength(c):
     l = c[-1]
     return abs(l["c"] - l["o"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0
 
-def position(c):
-    l = c[-1]
-    return (l["c"] - l["l"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0.5
-
 def structure(c):
     if c[-1]["h"] > c[-2]["h"] and c[-1]["l"] > c[-2]["l"]:
         return "UP"
@@ -83,50 +79,12 @@ def entry_ok(direction, c1):
     if direction == "BUY":
         if not (prev["c"] < prev["o"] and last["c"] > last["o"]):
             return False
-        if last["c"] - last["l"] < (last["h"] - last["l"]) * 0.6:
-            return False
 
     if direction == "SELL":
         if not (prev["c"] > prev["o"] and last["c"] < last["o"]):
             return False
-        if last["h"] - last["c"] < (last["h"] - last["l"]) * 0.6:
-            return False
 
     return True
-
-# ================= AI =================
-
-def ai_score(direction, c1, c5, c15):
-    score = 0
-
-    e20 = ema(c15[-50:], 20)
-    e50 = ema(c15[-50:], 50)
-
-    if (e20 > e50 and direction == "BUY") or (e20 < e50 and direction == "SELL"):
-        score += 25
-
-    if structure(c15) == ("UP" if direction == "BUY" else "DOWN"):
-        score += 20
-
-    if strength(c1) > 0.6:
-        score += 15
-
-    pos = position(c1)
-    if (direction == "BUY" and pos > 0.7) or (direction == "SELL" and pos < 0.3):
-        score += 15
-
-    m5 = c5[-1]
-    if ("BUY" if m5["c"] > m5["o"] else "SELL") == direction:
-        score += 15
-
-    last5 = c1[-5:]
-    if not (all(x["c"] > x["o"] for x in last5) or all(x["c"] < x["o"] for x in last5)):
-        score += 10
-
-    if HISTORY[-3:].count("loss") >= 2:
-        score -= 15
-
-    return max(0, min(score, 100))
 
 # ================= CORE =================
 
@@ -140,42 +98,54 @@ def analyze():
     if not c1 or not c5 or not c15:
         return None
 
-    direction = "BUY" if c15[-1]["c"] > c15[-1]["o"] else "SELL"
+    # 🔥 КОНТЕКСТ (як трейдер)
+    e20 = ema(c15[-50:], 20)
+    e50 = ema(c15[-50:], 50)
+    trend = structure(c15)
+
+    if not ((e20 > e50 and trend == "UP") or (e20 < e50 and trend == "DOWN")):
+        return None
+
+    direction = "BUY" if e20 > e50 else "SELL"
 
     if LAST_DIRECTION == direction:
         return None
 
+    # ❌ флет
     if atr(c1) < 0.00012:
         return None
 
-    if abs(c1[-1]["c"] - c1[-1]["o"]) < 0.00005:
-        return None
-
-    if strength(c1) < 0.6:
-        return None
-
+    # ❌ перегрів
     last3 = c1[-3:]
     if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
         return None
 
-    # 🔥 ENTRY ЛОГІКА
-    if not entry_ok(direction, c1):
-        return None
-
+    # 🔥 ЗОНА (ВАЖЛИВО)
     r, s = levels(c15)
     price = c1[-1]["c"]
 
-    if abs(price - r) < 0.00025 or abs(price - s) < 0.00025:
+    # беремо тільки якщо ціна НЕ в середині
+    mid = (r + s) / 2
+    if abs(price - mid) < 0.0003:
         return None
 
-    score = ai_score(direction, c1, c5, c15)
+    # 🔥 ENTRY
+    if not entry_ok(direction, c1):
+        return None
 
-    if score < 85:
+    # 🔥 СИЛА
+    if strength(c1) < 0.6:
+        return None
+
+    # 🔥 ПРОСТІР ДЛЯ РУХУ
+    if direction == "BUY" and (r - price) < 0.0003:
+        return None
+    if direction == "SELL" and (price - s) < 0.0003:
         return None
 
     LAST_DIRECTION = direction
 
-    return {"dir": direction, "score": score, "level": "GOOD"}
+    return {"dir": direction}
 
 # ================= UI =================
 
@@ -191,7 +161,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V7.4 ENTRY BOT", reply_markup=keyboard())
+    await update.message.reply_text("🔥 V9 PRO BOT", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -203,33 +173,22 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s = analyze()
 
         if not s:
-            try:
-                await q.edit_message_text("❌ SKIP", reply_markup=keyboard())
-            except:
-                pass
+            await q.edit_message_text("❌ Нема сетапу", reply_markup=keyboard())
             return
 
         msg = f"""
-🚀 PRO SIGNAL
+🔥 PRO SETUP
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-🧠 {s['score']}%
-⚡ GOOD
+📌 Вхід після закриття свічки
 """
-
-        try:
-            await q.edit_message_text(msg, reply_markup=keyboard())
-        except:
-            pass
+        await q.edit_message_text(msg, reply_markup=keyboard())
 
     elif q.data == "auto":
         AUTO = not AUTO
-        try:
-            await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
-        except:
-            pass
+        await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
 
     elif q.data == "win":
         HISTORY.append("win")
@@ -247,18 +206,17 @@ async def loop(app):
             s = analyze()
             if s:
                 msg = f"""
-🚀 PRO SIGNAL
+🔥 PRO SETUP
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-🧠 {s['score']}%
-⚡ GOOD
+📌 Вхід після закриття свічки
 """
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id, msg)
 
-        await asyncio.sleep(20)
+        await asyncio.sleep(30)
 
 # ================= MAIN =================
 
@@ -273,7 +231,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 V7.4 RUNNING")
+    print("🔥 V9 PRO RUNNING")
 
     app.run_polling()
 
