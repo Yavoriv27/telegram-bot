@@ -54,10 +54,6 @@ def atr(c):
     trs = [abs(c[i]["h"] - c[i]["l"]) for i in range(-14, -1)]
     return sum(trs) / len(trs) if trs else 0
 
-def strength(c):
-    l = c[-1]
-    return abs(l["c"] - l["o"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0
-
 def structure(c):
     if c[-1]["h"] > c[-2]["h"] and c[-1]["l"] > c[-2]["l"]:
         return "UP"
@@ -69,6 +65,10 @@ def levels(c):
     highs = [x["h"] for x in c[-20:]]
     lows = [x["l"] for x in c[-20:]]
     return max(highs), min(lows)
+
+def strength(c):
+    l = c[-1]
+    return abs(l["c"] - l["o"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0
 
 # ================= ENTRY =================
 
@@ -98,7 +98,7 @@ def analyze():
     if not c1 or not c5 or not c15:
         return None
 
-    # 🔥 КОНТЕКСТ (як трейдер)
+    # 🔥 ТРЕНД (EMA + структура)
     e20 = ema(c15[-50:], 20)
     e50 = ema(c15[-50:], 50)
     trend = structure(c15)
@@ -115,29 +115,38 @@ def analyze():
     if atr(c1) < 0.00012:
         return None
 
-    # ❌ перегрів
+    # ❌ перегрів (3 свічки підряд)
     last3 = c1[-3:]
     if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
         return None
 
-    # 🔥 ЗОНА (ВАЖЛИВО)
-    r, s = levels(c15)
-    price = c1[-1]["c"]
+    # ❌ дуже велика свічка (кінець руху)
+    rng = c1[-1]["h"] - c1[-1]["l"]
+    if rng > 0.0005:
+        return None
 
-    # беремо тільки якщо ціна НЕ в середині
-    mid = (r + s) / 2
-    if abs(price - mid) < 0.0003:
+    # 🔥 ПРОДОВЖЕННЯ (ключове!)
+    if direction == "BUY" and c1[-2]["c"] <= c1[-3]["h"]:
+        return None
+    if direction == "SELL" and c1[-2]["c"] >= c1[-3]["l"]:
         return None
 
     # 🔥 ENTRY
     if not entry_ok(direction, c1):
         return None
 
+    # 🔥 ЗОНИ (тільки край)
+    r, s = levels(c15)
+    price = c1[-1]["c"]
+
+    if not (price > r - 0.0005 or price < s + 0.0005):
+        return None
+
     # 🔥 СИЛА
     if strength(c1) < 0.6:
         return None
 
-    # 🔥 ПРОСТІР ДЛЯ РУХУ
+    # 🔥 ПРОСТІР
     if direction == "BUY" and (r - price) < 0.0003:
         return None
     if direction == "SELL" and (price - s) < 0.0003:
@@ -161,7 +170,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V9 PRO BOT", reply_markup=keyboard())
+    await update.message.reply_text("🔥 V10 PRO BOT", reply_markup=keyboard())
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -177,12 +186,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"""
-🔥 PRO SETUP
+🔥 V10 SETUP
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-📌 Вхід після закриття свічки
+📌 Вхід після закриття M1
 """
         await q.edit_message_text(msg, reply_markup=keyboard())
 
@@ -206,12 +215,12 @@ async def loop(app):
             s = analyze()
             if s:
                 msg = f"""
-🔥 PRO SETUP
+🔥 V10 SETUP
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-📌 Вхід після закриття свічки
+📌 Вхід після закриття M1
 """
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id, msg)
@@ -231,7 +240,7 @@ def main():
 
     app.post_init = post_init
 
-    print("🔥 V9 PRO RUNNING")
+    print("🔥 V10 RUNNING")
 
     app.run_polling()
 
