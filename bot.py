@@ -3,6 +3,7 @@
 import os
 import asyncio
 from dotenv import load_dotenv
+from datetime import datetime
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -23,6 +24,10 @@ AUTO = True
 
 LAST_DIRECTION = None
 HISTORY = []
+TRADES_TODAY = 0
+LAST_DAY = None
+
+MAX_TRADES = 2
 
 # ================= DATA =================
 
@@ -44,52 +49,48 @@ def get_candles(tf, count=120):
 # ================= INDICATORS =================
 
 def ema(c, p):
-    k = 2 / (p + 1)
+    k = 2/(p+1)
     e = c[0]["c"]
     for x in c:
-        e = x["c"] * k + e * (1 - k)
+        e = x["c"]*k + e*(1-k)
     return e
 
 def atr(c):
-    trs = [abs(c[i]["h"] - c[i]["l"]) for i in range(-14, -1)]
-    return sum(trs) / len(trs) if trs else 0
+    trs = [abs(c[i]["h"]-c[i]["l"]) for i in range(-14,-1)]
+    return sum(trs)/len(trs) if trs else 0
 
 def structure(c):
-    if c[-1]["h"] > c[-2]["h"] and c[-1]["l"] > c[-2]["l"]:
+    if c[-1]["h"]>c[-2]["h"] and c[-1]["l"]>c[-2]["l"]:
         return "UP"
-    if c[-1]["h"] < c[-2]["h"] and c[-1]["l"] < c[-2]["l"]:
+    if c[-1]["h"]<c[-2]["h"] and c[-1]["l"]<c[-2]["l"]:
         return "DOWN"
     return "RANGE"
 
-def levels(c):
-    highs = [x["h"] for x in c[-20:]]
-    lows = [x["l"] for x in c[-20:]]
-    return max(highs), min(lows)
-
 def strength(c):
-    l = c[-1]
-    return abs(l["c"] - l["o"]) / (l["h"] - l["l"]) if (l["h"] - l["l"]) else 0
+    l=c[-1]
+    return abs(l["c"]-l["o"])/(l["h"]-l["l"]) if (l["h"]-l["l"]) else 0
 
-# ================= ENTRY =================
-
-def entry_ok(direction, c1):
-    prev = c1[-2]
-    last = c1[-1]
-
-    if direction == "BUY":
-        if not (prev["c"] < prev["o"] and last["c"] > last["o"]):
-            return False
-
-    if direction == "SELL":
-        if not (prev["c"] > prev["o"] and last["c"] < last["o"]):
-            return False
-
-    return True
+def levels(c):
+    highs=[x["h"] for x in c[-20:]]
+    lows=[x["l"] for x in c[-20:]]
+    return max(highs),min(lows)
 
 # ================= CORE =================
 
 def analyze():
-    global LAST_DIRECTION
+    global LAST_DIRECTION, TRADES_TODAY, LAST_DAY
+
+    today = datetime.utcnow().date()
+    if LAST_DAY != today:
+        TRADES_TODAY = 0
+        LAST_DAY = today
+
+    if TRADES_TODAY >= MAX_TRADES:
+        return None
+
+    # ❌ поганий день
+    if HISTORY[-3:].count("loss") >= 2:
+        return None
 
     c1 = get_candles("M1")
     c5 = get_candles("M5")
@@ -98,112 +99,113 @@ def analyze():
     if not c1 or not c5 or not c15:
         return None
 
-    # 🔥 ТРЕНД (EMA + структура)
-    e20 = ema(c15[-50:], 20)
-    e50 = ema(c15[-50:], 50)
-    trend = structure(c15)
-
-    if not ((e20 > e50 and trend == "UP") or (e20 < e50 and trend == "DOWN")):
+    # 🔥 оцінка ринку
+    if atr(c15) < 0.0005:
         return None
 
-    direction = "BUY" if e20 > e50 else "SELL"
+    e20 = ema(c15[-50:],20)
+    e50 = ema(c15[-50:],50)
+    trend = structure(c15)
+
+    if not ((e20>e50 and trend=="UP") or (e20<e50 and trend=="DOWN")):
+        return None
+
+    direction = "BUY" if e20>e50 else "SELL"
 
     if LAST_DIRECTION == direction:
         return None
 
-    # ❌ флет
-    if atr(c1) < 0.00012:
-        return None
-
-    # ❌ перегрів (3 свічки підряд)
+    # ❌ перегрів
     last3 = c1[-3:]
-    if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
+    if all(x["c"]>x["o"] for x in last3) or all(x["c"]<x["o"] for x in last3):
         return None
 
-    # ❌ дуже велика свічка (кінець руху)
-    rng = c1[-1]["h"] - c1[-1]["l"]
-    if rng > 0.0005:
+    # ❌ велика свічка
+    if (c1[-1]["h"]-c1[-1]["l"]) > 0.0005:
         return None
 
-    # 🔥 ПРОДОВЖЕННЯ (ключове!)
-    if direction == "BUY" and c1[-2]["c"] <= c1[-3]["h"]:
+    # 🔥 подвійне підтвердження
+    if direction=="BUY":
+        if not (c1[-2]["c"]<c1[-2]["o"] and c1[-1]["c"]>c1[-1]["o"]):
+            return None
+    else:
+        if not (c1[-2]["c"]>c1[-2]["o"] and c1[-1]["c"]<c1[-1]["o"]):
+            return None
+
+    # 🔥 додаткове підтвердження з M5
+    if direction=="BUY" and c5[-1]["c"]<=c5[-1]["o"]:
         return None
-    if direction == "SELL" and c1[-2]["c"] >= c1[-3]["l"]:
+    if direction=="SELL" and c5[-1]["c"]>=c5[-1]["o"]:
         return None
 
-    # 🔥 ENTRY
-    if not entry_ok(direction, c1):
-        return None
-
-    # 🔥 ЗОНИ (тільки край)
-    r, s = levels(c15)
+    # 🔥 зона
+    r,s = levels(c15)
     price = c1[-1]["c"]
 
-    if not (price > r - 0.0005 or price < s + 0.0005):
+    if not (price > r-0.0005 or price < s+0.0005):
         return None
 
-    # 🔥 СИЛА
-    if strength(c1) < 0.6:
+    # 🔥 сила
+    if strength(c1)<0.6:
         return None
 
-    # 🔥 ПРОСТІР
-    if direction == "BUY" and (r - price) < 0.0003:
+    # 🔥 простір
+    if direction=="BUY" and (r-price)<0.0003:
         return None
-    if direction == "SELL" and (price - s) < 0.0003:
+    if direction=="SELL" and (price-s)<0.0003:
         return None
 
     LAST_DIRECTION = direction
+    TRADES_TODAY += 1
 
-    return {"dir": direction}
+    return {"dir":direction}
 
 # ================= UI =================
 
 def keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
-        [
-            InlineKeyboardButton("✅", callback_data="win"),
-            InlineKeyboardButton("❌", callback_data="loss")
-        ]
+        [InlineKeyboardButton("📈 Прогноз",callback_data="signal")],
+        [InlineKeyboardButton("🤖 Авто",callback_data="auto")],
+        [InlineKeyboardButton("✅",callback_data="win"),
+         InlineKeyboardButton("❌",callback_data="loss")]
     ])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V10 PRO BOT", reply_markup=keyboard())
+    await update.message.reply_text("🔥 V11 ULTRA",reply_markup=keyboard())
 
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
     global AUTO
 
-    q = update.callback_query
+    q=update.callback_query
     await q.answer()
 
-    if q.data == "signal":
-        s = analyze()
+    if q.data=="signal":
+        s=analyze()
 
         if not s:
-            await q.edit_message_text("❌ Нема сетапу", reply_markup=keyboard())
+            await q.edit_message_text("❌ Нема сетапу",reply_markup=keyboard())
             return
 
-        msg = f"""
-🔥 V10 SETUP
+        msg=f"""
+🔥 ULTRA SETUP
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
 📌 Вхід після закриття M1
 """
-        await q.edit_message_text(msg, reply_markup=keyboard())
+        await q.edit_message_text(msg,reply_markup=keyboard())
 
-    elif q.data == "auto":
-        AUTO = not AUTO
-        await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
+    elif q.data=="auto":
+        AUTO=not AUTO
+        await q.edit_message_text(f"AUTO: {AUTO}",reply_markup=keyboard())
 
-    elif q.data == "win":
+    elif q.data=="win":
         HISTORY.append("win")
         await q.answer("+")
 
-    elif q.data == "loss":
+    elif q.data=="loss":
         HISTORY.append("loss")
         await q.answer("-")
 
@@ -212,10 +214,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def loop(app):
     while True:
         if AUTO:
-            s = analyze()
+            s=analyze()
             if s:
-                msg = f"""
-🔥 V10 SETUP
+                msg=f"""
+🔥 ULTRA SETUP
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
@@ -223,26 +225,26 @@ async def loop(app):
 📌 Вхід після закриття M1
 """
                 for chat_id in CHAT_IDS:
-                    await app.bot.send_message(chat_id, msg)
+                    await app.bot.send_message(chat_id,msg)
 
         await asyncio.sleep(30)
 
 # ================= MAIN =================
 
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app=Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start",start))
     app.add_handler(CallbackQueryHandler(buttons))
 
     async def post_init(app):
         asyncio.get_event_loop().create_task(loop(app))
 
-    app.post_init = post_init
+    app.post_init=post_init
 
-    print("🔥 V10 RUNNING")
+    print("🔥 V11 ULTRA RUNNING")
 
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
