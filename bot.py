@@ -100,7 +100,7 @@ def analyze():
         return None
 
     # 🔥 оцінка ринку
-    if atr(c15) < 0.0005:
+    if atr(c15) < 0.0004:
         return None
 
     e20 = ema(c15[-50:],20)
@@ -132,21 +132,16 @@ def analyze():
         if not (c1[-2]["c"]>c1[-2]["o"] and c1[-1]["c"]<c1[-1]["o"]):
             return None
 
-    # 🔥 додаткове підтвердження з M5
-    if direction=="BUY" and c5[-1]["c"]<=c5[-1]["o"]:
-        return None
-    if direction=="SELL" and c5[-1]["c"]>=c5[-1]["o"]:
-        return None
 
     # 🔥 зона
     r,s = levels(c15)
     price = c1[-1]["c"]
 
-    if not (price > r-0.0005 or price < s+0.0005):
+    if not (price > r-0.0006 or price < s+0.0006):
         return None
 
     # 🔥 сила
-    if strength(c1)<0.6:
+    if strength(c1)<0.5:
         return None
 
     # 🔥 простір
