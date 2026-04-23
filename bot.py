@@ -24,10 +24,6 @@ AUTO = True
 
 LAST_DIRECTION = None
 HISTORY = []
-TRADES_TODAY = 0
-LAST_DAY = None
-
-MAX_TRADES = 2
 
 # ================= DATA =================
 
@@ -59,6 +55,10 @@ def atr(c):
     trs = [abs(c[i]["h"]-c[i]["l"]) for i in range(-14,-1)]
     return sum(trs)/len(trs) if trs else 0
 
+def strength(c):
+    l=c[-1]
+    return abs(l["c"]-l["o"])/(l["h"]-l["l"]) if (l["h"]-l["l"]) else 0
+
 def structure(c):
     if c[-1]["h"]>c[-2]["h"] and c[-1]["l"]>c[-2]["l"]:
         return "UP"
@@ -66,31 +66,42 @@ def structure(c):
         return "DOWN"
     return "RANGE"
 
-def strength(c):
-    l=c[-1]
-    return abs(l["c"]-l["o"])/(l["h"]-l["l"]) if (l["h"]-l["l"]) else 0
-
 def levels(c):
     highs=[x["h"] for x in c[-20:]]
     lows=[x["l"] for x in c[-20:]]
     return max(highs),min(lows)
 
+# ================= MARKET STATE =================
+
+def market_state(c15):
+    atr_val = atr(c15)
+    e20 = ema(c15[-50:],20)
+    e50 = ema(c15[-50:],50)
+
+    trend_power = abs(e20 - e50)
+
+    if atr_val < 0.0003:
+        return "WEAK"
+    elif atr_val > 0.0007 and trend_power > 0.0003:
+        return "STRONG"
+    else:
+        return "NORMAL"
+
+# ================= ENTRY =================
+
+def entry_ok(direction, c1):
+    prev = c1[-2]
+    last = c1[-1]
+
+    if direction == "BUY":
+        return prev["c"] < prev["o"] and last["c"] > last["o"]
+    else:
+        return prev["c"] > prev["o"] and last["c"] < last["o"]
+
 # ================= CORE =================
 
 def analyze():
-    global LAST_DIRECTION, TRADES_TODAY, LAST_DAY
-
-    today = datetime.utcnow().date()
-    if LAST_DAY != today:
-        TRADES_TODAY = 0
-        LAST_DAY = today
-
-    if TRADES_TODAY >= MAX_TRADES:
-        return None
-
-    # ❌ поганий день
-    if HISTORY[-3:].count("loss") >= 2:
-        return None
+    global LAST_DIRECTION
 
     c1 = get_candles("M1")
     c5 = get_candles("M5")
@@ -99,8 +110,10 @@ def analyze():
     if not c1 or not c5 or not c15:
         return None
 
-    # 🔥 оцінка ринку
-    if atr(c15) < 0.0004:
+    state = market_state(c15)
+
+    # ❌ не торгуємо в слабкому
+    if state == "WEAK":
         return None
 
     e20 = ema(c15[-50:],20)
@@ -115,45 +128,47 @@ def analyze():
     if LAST_DIRECTION == direction:
         return None
 
+    # 🔥 адаптивні параметри
+    if state == "STRONG":
+        strength_limit = 0.45
+        zone_range = 0.0008
+    else:
+        strength_limit = 0.55
+        zone_range = 0.0006
+
     # ❌ перегрів
     last3 = c1[-3:]
     if all(x["c"]>x["o"] for x in last3) or all(x["c"]<x["o"] for x in last3):
         return None
 
     # ❌ велика свічка
-    if (c1[-1]["h"]-c1[-1]["l"]) > 0.0005:
+    if (c1[-1]["h"]-c1[-1]["l"]) > 0.0006:
         return None
 
-    # 🔥 подвійне підтвердження
-    if direction=="BUY":
-        if not (c1[-2]["c"]<c1[-2]["o"] and c1[-1]["c"]>c1[-1]["o"]):
-            return None
-    else:
-        if not (c1[-2]["c"]>c1[-2]["o"] and c1[-1]["c"]<c1[-1]["o"]):
-            return None
+    # ENTRY
+    if not entry_ok(direction, c1):
+        return None
 
+    # сила
+    if strength(c1) < strength_limit:
+        return None
 
-    # 🔥 зона
+    # зона
     r,s = levels(c15)
     price = c1[-1]["c"]
 
-    if not (price > r-0.0006 or price < s+0.0006):
+    if not (price > r-zone_range or price < s+zone_range):
         return None
 
-    # 🔥 сила
-    if strength(c1)<0.5:
-        return None
-
-    # 🔥 простір
+    # простір
     if direction=="BUY" and (r-price)<0.0003:
         return None
     if direction=="SELL" and (price-s)<0.0003:
         return None
 
     LAST_DIRECTION = direction
-    TRADES_TODAY += 1
 
-    return {"dir":direction}
+    return {"dir":direction, "state":state}
 
 # ================= UI =================
 
@@ -167,7 +182,7 @@ def keyboard():
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V11 ULTRA",reply_markup=keyboard())
+    await update.message.reply_text("🔥 V12 ADAPTIVE",reply_markup=keyboard())
 
 async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
     global AUTO
@@ -183,12 +198,13 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
             return
 
         msg=f"""
-🔥 ULTRA SETUP
+🔥 ADAPTIVE SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-📌 Вхід після закриття M1
+🧠 Ринок: {s['state']}
+📌 Вхід після M1
 """
         await q.edit_message_text(msg,reply_markup=keyboard())
 
@@ -212,17 +228,18 @@ async def loop(app):
             s=analyze()
             if s:
                 msg=f"""
-🔥 ULTRA SETUP
+🔥 ADAPTIVE SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-📌 Вхід після закриття M1
+🧠 Ринок: {s['state']}
+📌 Вхід після M1
 """
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(chat_id,msg)
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(25)
 
 # ================= MAIN =================
 
@@ -237,7 +254,7 @@ def main():
 
     app.post_init=post_init
 
-    print("🔥 V11 ULTRA RUNNING")
+    print("🔥 V12 ADAPTIVE RUNNING")
 
     app.run_polling()
 
