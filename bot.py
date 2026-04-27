@@ -15,9 +15,18 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
 # ===== ENV =====
-TOKEN = os.getenv
-CHAT_ID = os.getenv
-OANDA_TOKEN = os.getenv
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+OANDA_TOKEN = os.getenv("OANDA_API_KEY")
+ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
+ENV = os.getenv("OANDA_ENV", "practice")
+
+# 🔒 перевірка
+if not TOKEN:
+    raise ValueError("❌ TELEGRAM TOKEN не знайдено")
+
+if not OANDA_TOKEN:
+    raise ValueError("❌ OANDA TOKEN не знайдено")
 
 PAIR = "EUR_USD"
 
@@ -25,7 +34,10 @@ MODEL_FILE = "model_v25.pkl"
 CALIB_FILE = "calib_v25.pkl"
 BUFFER_FILE = "buffer_v25.pkl"
 
-client = oandapyV20.API(access_token=OANDA_TOKEN)
+client = oandapyV20.API(
+    access_token=OANDA_TOKEN,
+    environment=ENV
+)
 
 # ===== STATE =====
 balance = 3000
@@ -55,33 +67,24 @@ def get_candles(tf="M5", count=300):
 # ===== SESSION FILTER =====
 def session_filter():
     h = datetime.utcnow().hour
-    return 7 <= h <= 17  # London + NY
+    return 7 <= h <= 17
 
 # ===== VOLATILITY FILTER =====
 def volatility_filter(df):
     atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
     avg = (df["high"] - df["low"]).mean()
-
-    if atr > avg * 2:
-        return False  # spike
-    return True
+    return atr < avg * 2
 
 # ===== FEATURES =====
 def compute_features(df):
     last = df.iloc[-1]
 
-    # liquidity distance
     high = df["high"].rolling(20).max().iloc[-1]
     low = df["low"].rolling(20).min().iloc[-1]
+
     liquidity_dist = min(abs(last["close"] - high), abs(last["close"] - low))
-
-    # structure history
     trend = np.sign(df["close"].iloc[-1] - df["close"].iloc[-10])
-
-    # volatility
     vol = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
-
-    # momentum
     momentum = last["close"] - df["close"].iloc[-5]
 
     return np.array([liquidity_dist, trend, vol, momentum])
@@ -98,19 +101,7 @@ def mtf_features():
 
     return np.concatenate([f1, f5, f15]), df5
 
-# ===== TRAIN =====
-def train(X, y):
-    model = RandomForestClassifier(n_estimators=200)
-    model.fit(X, y)
-
-    probs = model.predict_proba(X)[:,1]
-    calib = LogisticRegression()
-    calib.fit(probs.reshape(-1,1), y)
-
-    joblib.dump(model, MODEL_FILE)
-    joblib.dump(calib, CALIB_FILE)
-
-# ===== LOAD =====
+# ===== MODEL =====
 def load_model():
     return joblib.load(MODEL_FILE), joblib.load(CALIB_FILE)
 
@@ -132,7 +123,16 @@ def update_model(features, result):
     buf["y"].append(result)
 
     if len(buf["y"]) >= 20:
-        train(buf["X"], buf["y"])
+        model = RandomForestClassifier(n_estimators=200)
+        model.fit(buf["X"], buf["y"])
+
+        probs = model.predict_proba(buf["X"])[:,1]
+        calib = LogisticRegression()
+        calib.fit(probs.reshape(-1,1), buf["y"])
+
+        joblib.dump(model, MODEL_FILE)
+        joblib.dump(calib, CALIB_FILE)
+
         buf = {"X": [], "y": []}
 
     save_buffer(buf)
@@ -216,7 +216,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def win(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global balance, loss_streak, daily_loss
+    global balance, loss_streak
 
     feat = context.user_data.get("last_feat")
 
