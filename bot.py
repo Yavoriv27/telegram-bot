@@ -251,8 +251,19 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("signal", signal))
 
-    app.post_init = post_init
-    app.run_polling()
+    async def run():
+        await app.initialize()
+        await app.start()
 
+        # запускаємо авто-сигнали
+        asyncio.create_task(auto(app))
+
+        # запускаємо polling
+        await app.updater.start_polling()
+
+        # тримаємо процес живим
+        await asyncio.Event().wait()
+
+    asyncio.run(run())
 if __name__ == "__main__":
     main()
