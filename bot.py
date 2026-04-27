@@ -96,6 +96,20 @@ def mtf_features():
 
     return np.concatenate([f1, f5, f15]), df5
 
+# ===== RR =====
+def calculate_rr(entry, tp, sl, direction):
+    if direction == "BUY":
+        risk = entry - sl
+        reward = tp - entry
+    else:
+        risk = sl - entry
+        reward = entry - tp
+
+    if risk <= 0:
+        return 0
+
+    return round(reward / risk, 2)
+
 # ===== TRAIN =====
 def train(X, y):
     model = RandomForestClassifier(n_estimators=200)
@@ -195,12 +209,12 @@ def calculate_tp_sl(df, direction):
 # ===== SIGNAL =====
 def generate_signal():
     if not session_filter():
-        return None, "Поза сесією", None, None, None
+        return None, "Поза сесією", None, None, None, None, None
 
     feat, df = mtf_features()
 
     if not volatility_filter(df):
-        return None, "Spike / новини", None, None, None
+        return None, "Spike / новини", None, None, None, None, None
 
     model, calib = load_model()
 
@@ -215,19 +229,29 @@ def generate_signal():
         direction = "SELL"
         confidence = 100 - confidence
     else:
-        return None, "Немає edge", None, None, None
+        return None, "Немає edge", None, None, None, None, None
 
     tp, sl = calculate_tp_sl(df, direction)
     bet = get_bet()
 
-    return direction, confidence, tp, sl, bet
+    entry = df.iloc[-1]["close"]
+    rr = calculate_rr(entry, tp, sl, direction)
+
+    if rr >= 2 and confidence >= 80:
+        strength = "🔥 СИЛЬНИЙ"
+    elif rr >= 1.5:
+        strength = "⚖️ НОРМАЛЬНИЙ"
+    else:
+        strength = "⚠️ СЛАБКИЙ"
+
+    return direction, confidence, tp, sl, bet, rr, strength
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V25 MULTI USER")
+    await update.message.reply_text("🚀 V25 PRO BOT")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    direction, conf, tp, sl, bet = generate_signal()
+    direction, conf, tp, sl, bet, rr, strength = generate_signal()
 
     if direction is None:
         await update.message.reply_text(f"❌ {conf}")
@@ -240,7 +264,9 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💵 {bet}\n"
         f"📊 {conf}%\n"
         f"🎯 TP: {round(tp,5)}\n"
-        f"🛑 SL: {round(sl,5)}"
+        f"🛑 SL: {round(sl,5)}\n"
+        f"📊 RR: 1:{rr}\n"
+        f"{strength}"
     )
 
 async def win(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -274,13 +300,13 @@ async def loss(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def auto(app):
     while True:
         try:
-            direction, conf, tp, sl, bet = generate_signal()
+            direction, conf, tp, sl, bet, rr, strength = generate_signal()
 
             if direction and conf > 70 and CHAT_IDS:
                 for chat_id in CHAT_IDS:
                     await app.bot.send_message(
                         chat_id=chat_id,
-                        text=f"{direction} | {conf}% | TP {round(tp,5)} | SL {round(sl,5)}"
+                        text=f"{direction} | {conf}% | RR 1:{rr} | {strength}"
                     )
         except Exception as e:
             print("AUTO ERROR:", e)
