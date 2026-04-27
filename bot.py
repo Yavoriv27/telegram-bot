@@ -256,6 +256,9 @@ async def auto(app):
         await asyncio.sleep(300)
 
 # ===== MAIN =====
+async def post_init(app):
+    asyncio.create_task(auto(app))
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -264,7 +267,7 @@ def main():
     app.add_handler(CommandHandler("win", win))
     app.add_handler(CommandHandler("loss", loss))
 
-    app.create_task(auto(app))
+    app.post_init = post_init  # 🔥 ВАЖЛИВО
 
     app.run_polling()
 
