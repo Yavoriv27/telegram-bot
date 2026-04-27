@@ -16,9 +16,11 @@ from sklearn.linear_model import LogisticRegression
 
 # ===== ENV =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
 ENV = os.getenv("OANDA_ENV", "practice")
+
+chat_ids_env = os.getenv("CHAT_IDS", "")
+CHAT_IDS = [int(x.strip()) for x in chat_ids_env.split(",") if x.strip().isdigit()]
 
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_BOT_TOKEN не знайдено")
@@ -27,17 +29,17 @@ if not OANDA_TOKEN:
 
 PAIR = "EUR_USD"
 
-MODEL_FILE = "model_v25.pkl"
-CALIB_FILE = "calib_v25.pkl"
-BUFFER_FILE = "buffer_v25.pkl"
+MODEL_FILE = "model.pkl"
+CALIB_FILE = "calib.pkl"
+BUFFER_FILE = "buffer.pkl"
 
 client = oandapyV20.API(access_token=OANDA_TOKEN, environment=ENV)
 
 # ===== STATE =====
 balance = 3000.0
-max_dd = 0.2
-daily_loss = 0.0
 loss_streak = 0
+daily_loss = 0.0
+max_dd = 0.2
 
 # ===== DATA =====
 def get_candles(tf="M5", count=300):
@@ -61,7 +63,7 @@ def get_candles(tf="M5", count=300):
 # ===== FILTERS =====
 def session_filter():
     h = datetime.utcnow().hour
-    return 7 <= h <= 17  # London + NY
+    return 7 <= h <= 17
 
 def volatility_filter(df):
     atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
@@ -138,7 +140,6 @@ def initial_train():
 def load_model():
     if not os.path.exists(MODEL_FILE):
         initial_train()
-
     return joblib.load(MODEL_FILE), joblib.load(CALIB_FILE)
 
 # ===== BUFFER =====
@@ -223,7 +224,7 @@ def generate_signal():
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V25 STABLE запущено")
+    await update.message.reply_text("🚀 V25 MULTI USER")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     direction, conf, tp, sl, bet = generate_signal()
@@ -275,11 +276,12 @@ async def auto(app):
         try:
             direction, conf, tp, sl, bet = generate_signal()
 
-            if direction and conf > 70 and CHAT_ID:
-                await app.bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=f"{direction} | {conf}% | TP {round(tp,5)} | SL {round(sl,5)}"
-                )
+            if direction and conf > 70 and CHAT_IDS:
+                for chat_id in CHAT_IDS:
+                    await app.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"{direction} | {conf}% | TP {round(tp,5)} | SL {round(sl,5)}"
+                    )
         except Exception as e:
             print("AUTO ERROR:", e)
 
