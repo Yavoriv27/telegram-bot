@@ -1,5 +1,6 @@
-python-telegram-bot[job-queue]==20.7
-oandapyV20
-python-dotenv
-yfinance
+python-telegram-bot==20.7
 pandas
+numpy
+scikit-learn
+joblib
+oandapyV20
