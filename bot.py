@@ -18,32 +18,20 @@ from sklearn.linear_model import LogisticRegression
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
-ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
 ENV = os.getenv("OANDA_ENV", "practice")
 
-# 🔒 перевірка
 if not TOKEN:
     raise ValueError("❌ TELEGRAM TOKEN не знайдено")
-
 if not OANDA_TOKEN:
     raise ValueError("❌ OANDA TOKEN не знайдено")
 
 PAIR = "EUR_USD"
 
-MODEL_FILE = "model_v25.pkl"
-CALIB_FILE = "calib_v25.pkl"
-BUFFER_FILE = "buffer_v25.pkl"
+MODEL_FILE = "model.pkl"
+CALIB_FILE = "calib.pkl"
+BUFFER_FILE = "buffer.pkl"
 
-client = oandapyV20.API(
-    access_token=OANDA_TOKEN,
-    environment=ENV
-)
-
-# ===== STATE =====
-balance = 3000
-max_dd = 0.2
-daily_loss = 0
-loss_streak = 0
+client = oandapyV20.API(access_token=OANDA_TOKEN, environment=ENV)
 
 # ===== DATA =====
 def get_candles(tf="M5", count=300):
@@ -63,17 +51,6 @@ def get_candles(tf="M5", count=300):
             })
 
     return pd.DataFrame(data)
-
-# ===== SESSION FILTER =====
-def session_filter():
-    h = datetime.utcnow().hour
-    return 7 <= h <= 17
-
-# ===== VOLATILITY FILTER =====
-def volatility_filter(df):
-    atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
-    avg = (df["high"] - df["low"]).mean()
-    return atr < avg * 2
 
 # ===== FEATURES =====
 def compute_features(df):
@@ -101,58 +78,65 @@ def mtf_features():
 
     return np.concatenate([f1, f5, f15]), df5
 
-# ===== MODEL =====
+# ===== TRAIN =====
+def train_model():
+    print("⚠️ Навчання моделі...")
+
+    df = get_candles("M5", 1500)
+
+    X, y = [], []
+
+    for i in range(50, len(df)-5):
+        sub = df.iloc[:i]
+
+        feat = compute_features(sub)
+
+        future = df["close"].iloc[i+3]
+        current = df["close"].iloc[i]
+
+        label = 1 if future > current else 0
+
+        X.append(feat)
+        y.append(label)
+
+    model = RandomForestClassifier(n_estimators=200)
+    model.fit(X, y)
+
+    probs = model.predict_proba(X)[:,1]
+    calib = LogisticRegression()
+    calib.fit(probs.reshape(-1,1), y)
+
+    joblib.dump(model, MODEL_FILE)
+    joblib.dump(calib, CALIB_FILE)
+
+    print("✅ Модель готова")
+
+# ===== LOAD =====
 def load_model():
+    if not os.path.exists(MODEL_FILE):
+        train_model()
+
     return joblib.load(MODEL_FILE), joblib.load(CALIB_FILE)
 
-# ===== BUFFER =====
-def load_buffer():
-    try:
-        return joblib.load(BUFFER_FILE)
-    except:
-        return {"X": [], "y": []}
+# ===== SIGNAL =====
+def generate_signal():
+    feat, df = mtf_features()
 
-def save_buffer(buf):
-    joblib.dump(buf, BUFFER_FILE)
+    model, calib = load_model()
 
-# ===== ONLINE LEARNING =====
-def update_model(features, result):
-    buf = load_buffer()
+    raw = model.predict_proba(feat.reshape(1,-1))[0][1]
+    prob = calib.predict_proba([[raw]])[0][1]
 
-    buf["X"].append(features)
-    buf["y"].append(result)
+    conf = int(prob * 100)
 
-    if len(buf["y"]) >= 20:
-        model = RandomForestClassifier(n_estimators=200)
-        model.fit(buf["X"], buf["y"])
+    if conf > 65:
+        direction = "BUY"
+    elif conf < 35:
+        direction = "SELL"
+        conf = 100 - conf
+    else:
+        return None, "Немає edge", None, None
 
-        probs = model.predict_proba(buf["X"])[:,1]
-        calib = LogisticRegression()
-        calib.fit(probs.reshape(-1,1), buf["y"])
-
-        joblib.dump(model, MODEL_FILE)
-        joblib.dump(calib, CALIB_FILE)
-
-        buf = {"X": [], "y": []}
-
-    save_buffer(buf)
-
-# ===== RISK =====
-def get_bet():
-    global balance, loss_streak
-
-    bet = balance * 0.1
-
-    if loss_streak >= 2:
-        bet *= 0.5
-
-    if daily_loss > balance * max_dd:
-        return 0
-
-    return round(bet, 2)
-
-# ===== TP/SL =====
-def calculate_tp_sl(df, direction):
     last = df.iloc[-1]
 
     if direction == "BUY":
@@ -162,95 +146,35 @@ def calculate_tp_sl(df, direction):
         sl = last["high"]
         tp = last["close"] - (sl - last["close"]) * 2
 
-    return tp, sl
-
-# ===== SIGNAL =====
-def generate_signal():
-    if not session_filter():
-        return None, "Поза сесією", None, None, None
-
-    feat, df = mtf_features()
-
-    if not volatility_filter(df):
-        return None, "Spike / новини", None, None, None
-
-    model, calib = load_model()
-
-    raw = model.predict_proba(feat.reshape(1,-1))[0][1]
-    prob = calib.predict_proba([[raw]])[0][1]
-
-    confidence = int(prob * 100)
-
-    if confidence > 65:
-        direction = "BUY"
-    elif confidence < 35:
-        direction = "SELL"
-        confidence = 100 - confidence
-    else:
-        return None, "Немає edge", None, None, None
-
-    tp, sl = calculate_tp_sl(df, direction)
-    bet = get_bet()
-
-    return direction, confidence, tp, sl, bet
+    return direction, conf, tp, sl
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V25 FINAL BOSS")
+    await update.message.reply_text("🚀 BOT WORKING")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    direction, conf, tp, sl, bet = generate_signal()
+    direction, conf, tp, sl = generate_signal()
 
     if direction is None:
         await update.message.reply_text(f"❌ {conf}")
         return
 
-    context.user_data["last_feat"] = mtf_features()[0]
-
     await update.message.reply_text(
         f"{'🔼 BUY' if direction=='BUY' else '🔻 SELL'}\n"
-        f"💵 {bet}\n"
         f"📊 {conf}%\n"
-        f"🎯 TP: {round(tp,5)}\n"
-        f"🛑 SL: {round(sl,5)}"
+        f"🎯 TP {round(tp,5)}\n"
+        f"🛑 SL {round(sl,5)}"
     )
-
-async def win(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global balance, loss_streak
-
-    feat = context.user_data.get("last_feat")
-
-    if feat is not None:
-        update_model(feat, 1)
-
-    balance *= 1.08
-    loss_streak = 0
-
-    await update.message.reply_text("✅ Win")
-
-async def loss(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global balance, loss_streak, daily_loss
-
-    feat = context.user_data.get("last_feat")
-
-    if feat is not None:
-        update_model(feat, 0)
-
-    balance *= 0.9
-    loss_streak += 1
-    daily_loss += 1
-
-    await update.message.reply_text("❌ Loss")
 
 # ===== AUTO =====
 async def auto(app):
     while True:
-        direction, conf, tp, sl, bet = generate_signal()
+        direction, conf, tp, sl = generate_signal()
 
-        if direction and conf > 70:
+        if direction and conf > 70 and CHAT_ID:
             await app.bot.send_message(
                 chat_id=CHAT_ID,
-                text=f"{direction} | {conf}% | TP {round(tp,5)} | SL {round(sl,5)}"
+                text=f"{direction} | {conf}%"
             )
 
         await asyncio.sleep(300)
@@ -264,10 +188,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("signal", signal))
-    app.add_handler(CommandHandler("win", win))
-    app.add_handler(CommandHandler("loss", loss))
 
-    app.post_init = post_init  # 🔥 ВАЖЛИВО
+    app.post_init = post_init
 
     app.run_polling()
 
