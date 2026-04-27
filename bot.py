@@ -1,10 +1,6 @@
-# -*- coding: utf-8 -*-
-
 import os
 import asyncio
 from dotenv import load_dotenv
-from datetime import datetime
-
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -22,8 +18,19 @@ PAIR = "EUR_USD"
 CHAT_IDS = set()
 AUTO = True
 
-LAST_DIRECTION = None
-HISTORY = []
+LAST_SIGNAL_TIME = 0
+
+# ================= CONFIG =================
+
+CONFIG = {
+    "score_threshold": 70,
+    "strength_limit": 0.5
+}
+
+stats = {
+    "wins": 0,
+    "losses": 0
+}
 
 # ================= DATA =================
 
@@ -52,40 +59,80 @@ def ema(c, p):
     return e
 
 def atr(c):
-    trs = [abs(c[i]["h"]-c[i]["l"]) for i in range(-14,-1)]
-    return sum(trs)/len(trs) if trs else 0
+    trs = []
+    for i in range(1, len(c)):
+        h = c[i]["h"]
+        l = c[i]["l"]
+        pc = c[i-1]["c"]
+
+        tr = max(h-l, abs(h-pc), abs(l-pc))
+        trs.append(tr)
+
+    return sum(trs[-14:]) / 14 if len(trs) >= 14 else 0
+
+def rsi(c, period=14):
+    gains, losses = [], []
+
+    for i in range(1, len(c)):
+        diff = c[i]["c"] - c[i-1]["c"]
+        if diff > 0:
+            gains.append(diff)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(diff))
+
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+
+    if avg_loss == 0:
+        return 100
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 def strength(c):
-    l=c[-1]
-    return abs(l["c"]-l["o"])/(l["h"]-l["l"]) if (l["h"]-l["l"]) else 0
+    l = c[-1]
+    return abs(l["c"]-l["o"]) / (l["h"]-l["l"]) if (l["h"]-l["l"]) else 0
 
 def structure(c):
-    if c[-1]["h"]>c[-2]["h"] and c[-1]["l"]>c[-2]["l"]:
+    if c[-1]["h"] > c[-2]["h"] and c[-1]["l"] > c[-2]["l"]:
         return "UP"
-    if c[-1]["h"]<c[-2]["h"] and c[-1]["l"]<c[-2]["l"]:
+    if c[-1]["h"] < c[-2]["h"] and c[-1]["l"] < c[-2]["l"]:
         return "DOWN"
     return "RANGE"
 
 def levels(c):
-    highs=[x["h"] for x in c[-20:]]
-    lows=[x["l"] for x in c[-20:]]
-    return max(highs),min(lows)
+    highs = [x["h"] for x in c[-20:]]
+    lows = [x["l"] for x in c[-20:]]
+    return max(highs), min(lows)
 
-# ================= MARKET STATE =================
+# ================= STATS =================
 
-def market_state(c15):
-    atr_val = atr(c15)
-    e20 = ema(c15[-50:],20)
-    e50 = ema(c15[-50:],50)
+def winrate():
+    total = stats["wins"] + stats["losses"]
+    if total == 0:
+        return 0
+    return round((stats["wins"] / total) * 100, 2)
 
-    trend_power = abs(e20 - e50)
+def adapt():
+    total = stats["wins"] + stats["losses"]
 
-    if atr_val < 0.0003:
-        return "WEAK"
-    elif atr_val > 0.0007 and trend_power > 0.0003:
-        return "STRONG"
-    else:
-        return "NORMAL"
+    if total < 20:
+        return
+
+    wr = winrate()
+
+    if wr < 50:
+        CONFIG["score_threshold"] -= 2
+        CONFIG["strength_limit"] -= 0.02
+
+    elif wr > 65:
+        CONFIG["score_threshold"] += 2
+        CONFIG["strength_limit"] += 0.02
+
+    CONFIG["score_threshold"] = max(60, min(85, CONFIG["score_threshold"]))
+    CONFIG["strength_limit"] = max(0.4, min(0.7, CONFIG["strength_limit"]))
 
 # ================= ENTRY =================
 
@@ -101,8 +148,6 @@ def entry_ok(direction, c1):
 # ================= CORE =================
 
 def analyze():
-    global LAST_DIRECTION
-
     c1 = get_candles("M1")
     c5 = get_candles("M5")
     c15 = get_candles("M15")
@@ -110,114 +155,107 @@ def analyze():
     if not c1 or not c5 or not c15:
         return None
 
-    state = market_state(c15)
+    e20 = ema(c15[-50:], 20)
+    e50 = ema(c15[-50:], 50)
 
-    # ❌ не торгуємо в слабкому
-    if state == "WEAK":
-        return None
+    trend15 = structure(c15)
+    trend5 = structure(c5)
 
-    e20 = ema(c15[-50:],20)
-    e50 = ema(c15[-50:],50)
-    trend = structure(c15)
+    direction = "BUY" if e20 > e50 else "SELL"
 
-    if not ((e20>e50 and trend=="UP") or (e20<e50 and trend=="DOWN")):
-        return None
+    score = 0
 
-    direction = "BUY" if e20>e50 else "SELL"
+    if (e20 > e50 and trend15 == "UP") or (e20 < e50 and trend15 == "DOWN"):
+        score += 30
 
-    if LAST_DIRECTION == direction:
-        return None
+    if trend5 == trend15:
+        score += 20
 
-    # 🔥 адаптивні параметри
-    if state == "STRONG":
-        strength_limit = 0.45
-        zone_range = 0.0008
-    else:
-        strength_limit = 0.55
-        zone_range = 0.0006
+    if entry_ok(direction, c1):
+        score += 20
 
-    # ❌ перегрів
-    last3 = c1[-3:]
-    if all(x["c"]>x["o"] for x in last3) or all(x["c"]<x["o"] for x in last3):
-        return None
+    if strength(c1) > CONFIG["strength_limit"]:
+        score += 10
 
-    # ❌ велика свічка
-    if (c1[-1]["h"]-c1[-1]["l"]) > 0.0006:
-        return None
-
-    # ENTRY
-    if not entry_ok(direction, c1):
-        return None
-
-    # сила
-    if strength(c1) < strength_limit:
-        return None
-
-    # зона
-    r,s = levels(c15)
+    r, s = levels(c15)
     price = c1[-1]["c"]
 
-    if not (price > r-zone_range or price < s+zone_range):
+    if price > r - 0.0007 or price < s + 0.0007:
+        score += 10
+
+    rsi_val = rsi(c5)
+
+    if direction == "BUY" and rsi_val < 70:
+        score += 10
+    elif direction == "SELL" and rsi_val > 30:
+        score += 10
+
+    atr_val = atr(c15)
+    if (c1[-1]["h"] - c1[-1]["l"]) < atr_val * 1.5:
+        score += 10
+
+    last3 = c1[-3:]
+    if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
         return None
 
-    # простір
-    if direction=="BUY" and (r-price)<0.0003:
-        return None
-    if direction=="SELL" and (price-s)<0.0003:
+    if score < CONFIG["score_threshold"]:
         return None
 
-    LAST_DIRECTION = direction
-
-    return {"dir":direction, "state":state}
+    return {
+        "dir": direction,
+        "score": score
+    }
 
 # ================= UI =================
 
 def keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз",callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто",callback_data="auto")],
-        [InlineKeyboardButton("✅",callback_data="win"),
-         InlineKeyboardButton("❌",callback_data="loss")]
+        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
+        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
+        [InlineKeyboardButton("✅", callback_data="win"),
+         InlineKeyboardButton("❌", callback_data="loss")]
     ])
 
-async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V12 ADAPTIVE",reply_markup=keyboard())
+    await update.message.reply_text("🔥 V14 PRO", reply_markup=keyboard())
 
-async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO
 
-    q=update.callback_query
+    q = update.callback_query
     await q.answer()
 
-    if q.data=="signal":
-        s=analyze()
+    if q.data == "signal":
+        s = analyze()
 
         if not s:
-            await q.edit_message_text("❌ Нема сетапу",reply_markup=keyboard())
+            await q.edit_message_text("❌ Нема сетапу", reply_markup=keyboard())
             return
 
-        msg=f"""
-🔥 ADAPTIVE SIGNAL
+        msg = f"""
+🔥 V14 SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-🧠 Ринок: {s['state']}
-📌 Вхід після M1
+📊 Score: {s['score']}%
+📊 Winrate: {winrate()}%
 """
-        await q.edit_message_text(msg,reply_markup=keyboard())
+        await q.edit_message_text(msg, reply_markup=keyboard())
 
-    elif q.data=="auto":
-        AUTO=not AUTO
-        await q.edit_message_text(f"AUTO: {AUTO}",reply_markup=keyboard())
+    elif q.data == "auto":
+        AUTO = not AUTO
+        await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
 
-    elif q.data=="win":
-        HISTORY.append("win")
+    elif q.data == "win":
+        stats["wins"] += 1
+        adapt()
         await q.answer("+")
 
-    elif q.data=="loss":
-        HISTORY.append("loss")
+    elif q.data == "loss":
+        stats["losses"] += 1
+        adapt()
         await q.answer("-")
 
 # ================= LOOP =================
@@ -225,38 +263,37 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 async def loop(app):
     while True:
         if AUTO:
-            s=analyze()
+            s = analyze()
             if s:
-                msg=f"""
-🔥 ADAPTIVE SIGNAL
+                msg = f"""
+🔥 AUTO SIGNAL
 
 📊 EUR/USD
 {'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
 
-🧠 Ринок: {s['state']}
-📌 Вхід після M1
+📊 Score: {s['score']}%
+📊 Winrate: {winrate()}%
 """
                 for chat_id in CHAT_IDS:
-                    await app.bot.send_message(chat_id,msg)
+                    await app.bot.send_message(chat_id, msg)
 
-        await asyncio.sleep(25)
+        await asyncio.sleep(30)
 
 # ================= MAIN =================
 
 def main():
-    app=Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start",start))
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
     async def post_init(app):
         asyncio.get_event_loop().create_task(loop(app))
 
-    app.post_init=post_init
+    app.post_init = post_init
 
-    print("🔥 V12 ADAPTIVE RUNNING")
-
+    print("🔥 V14 PRO RUNNING")
     app.run_polling()
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
