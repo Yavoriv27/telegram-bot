@@ -15,9 +15,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
 # ===== ENV =====
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-OANDA_TOKEN = os.getenv("OANDA_TOKEN")
+TOKEN = os.getenv
+CHAT_ID = os.getenv
+OANDA_TOKEN = os.getenv
 
 PAIR = "EUR_USD"
 
