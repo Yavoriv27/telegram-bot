@@ -27,9 +27,8 @@ if not OANDA_TOKEN:
 
 PAIR = "EUR_USD"
 
-MODEL_FILE = "model.pkl"
-CALIB_FILE = "calib.pkl"
-BUFFER_FILE = "buffer.pkl"
+MODEL_FILE = "model_v2.pkl"
+CALIB_FILE = "calib_v2.pkl"
 
 client = oandapyV20.API(access_token=OANDA_TOKEN, environment=ENV)
 
@@ -89,7 +88,12 @@ def train_model():
     for i in range(50, len(df)-5):
         sub = df.iloc[:i]
 
-        feat = compute_features(sub)
+        # 🔥 MTF як у сигналу
+        f1 = compute_features(sub)
+        f5 = compute_features(sub)
+        f15 = compute_features(sub)
+
+        feat = np.concatenate([f1, f5, f15])
 
         future = df["close"].iloc[i+3]
         current = df["close"].iloc[i]
@@ -150,7 +154,7 @@ def generate_signal():
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 BOT WORKING")
+    await update.message.reply_text("🚀 BOT READY")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     direction, conf, tp, sl = generate_signal()
