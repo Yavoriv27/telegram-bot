@@ -1,298 +1,271 @@
 import os
 import asyncio
-from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import pandas as pd
+import numpy as np
+import joblib
+from datetime import datetime
 
 import oandapyV20
-from oandapyV20.endpoints import instruments
+import oandapyV20.endpoints.instruments as instruments
 
-load_dotenv()
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OANDA_KEY = os.getenv("OANDA_API_KEY")
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 
-client = oandapyV20.API(access_token=OANDA_KEY)
+# ===== ENV =====
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+OANDA_TOKEN = os.getenv("OANDA_TOKEN")
 
 PAIR = "EUR_USD"
-CHAT_IDS = set()
-AUTO = True
 
-LAST_SIGNAL_TIME = 0
+MODEL_FILE = "model_v25.pkl"
+CALIB_FILE = "calib_v25.pkl"
+BUFFER_FILE = "buffer_v25.pkl"
 
-# ================= CONFIG =================
+client = oandapyV20.API(access_token=OANDA_TOKEN)
 
-CONFIG = {
-    "score_threshold": 70,
-    "strength_limit": 0.5
-}
+# ===== STATE =====
+balance = 3000
+max_dd = 0.2
+daily_loss = 0
+loss_streak = 0
 
-stats = {
-    "wins": 0,
-    "losses": 0
-}
+# ===== DATA =====
+def get_candles(tf="M5", count=300):
+    params = {"granularity": tf, "count": count, "price": "M"}
+    r = instruments.InstrumentsCandles(instrument=PAIR, params=params)
+    client.request(r)
 
-# ================= DATA =================
+    data = []
+    for c in r.response["candles"]:
+        if c["complete"]:
+            data.append({
+                "open": float(c["mid"]["o"]),
+                "high": float(c["mid"]["h"]),
+                "low": float(c["mid"]["l"]),
+                "close": float(c["mid"]["c"]),
+                "volume": c["volume"]
+            })
 
-def get_candles(tf, count=120):
+    return pd.DataFrame(data)
+
+# ===== SESSION FILTER =====
+def session_filter():
+    h = datetime.utcnow().hour
+    return 7 <= h <= 17  # London + NY
+
+# ===== VOLATILITY FILTER =====
+def volatility_filter(df):
+    atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
+    avg = (df["high"] - df["low"]).mean()
+
+    if atr > avg * 2:
+        return False  # spike
+    return True
+
+# ===== FEATURES =====
+def compute_features(df):
+    last = df.iloc[-1]
+
+    # liquidity distance
+    high = df["high"].rolling(20).max().iloc[-1]
+    low = df["low"].rolling(20).min().iloc[-1]
+    liquidity_dist = min(abs(last["close"] - high), abs(last["close"] - low))
+
+    # structure history
+    trend = np.sign(df["close"].iloc[-1] - df["close"].iloc[-10])
+
+    # volatility
+    vol = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
+
+    # momentum
+    momentum = last["close"] - df["close"].iloc[-5]
+
+    return np.array([liquidity_dist, trend, vol, momentum])
+
+# ===== MTF =====
+def mtf_features():
+    df1 = get_candles("M1")
+    df5 = get_candles("M5")
+    df15 = get_candles("M15")
+
+    f1 = compute_features(df1)
+    f5 = compute_features(df5)
+    f15 = compute_features(df15)
+
+    return np.concatenate([f1, f5, f15]), df5
+
+# ===== TRAIN =====
+def train(X, y):
+    model = RandomForestClassifier(n_estimators=200)
+    model.fit(X, y)
+
+    probs = model.predict_proba(X)[:,1]
+    calib = LogisticRegression()
+    calib.fit(probs.reshape(-1,1), y)
+
+    joblib.dump(model, MODEL_FILE)
+    joblib.dump(calib, CALIB_FILE)
+
+# ===== LOAD =====
+def load_model():
+    return joblib.load(MODEL_FILE), joblib.load(CALIB_FILE)
+
+# ===== BUFFER =====
+def load_buffer():
     try:
-        params = {"granularity": tf, "count": count, "price": "M"}
-        r = instruments.InstrumentsCandles(instrument=PAIR, params=params)
-        client.request(r)
-
-        return [{
-            "o": float(c["mid"]["o"]),
-            "c": float(c["mid"]["c"]),
-            "h": float(c["mid"]["h"]),
-            "l": float(c["mid"]["l"])
-        } for c in r.response["candles"] if c["complete"]]
+        return joblib.load(BUFFER_FILE)
     except:
-        return []
+        return {"X": [], "y": []}
 
-# ================= INDICATORS =================
+def save_buffer(buf):
+    joblib.dump(buf, BUFFER_FILE)
 
-def ema(c, p):
-    k = 2/(p+1)
-    e = c[0]["c"]
-    for x in c:
-        e = x["c"]*k + e*(1-k)
-    return e
+# ===== ONLINE LEARNING =====
+def update_model(features, result):
+    buf = load_buffer()
 
-def atr(c):
-    trs = []
-    for i in range(1, len(c)):
-        h = c[i]["h"]
-        l = c[i]["l"]
-        pc = c[i-1]["c"]
+    buf["X"].append(features)
+    buf["y"].append(result)
 
-        tr = max(h-l, abs(h-pc), abs(l-pc))
-        trs.append(tr)
+    if len(buf["y"]) >= 20:
+        train(buf["X"], buf["y"])
+        buf = {"X": [], "y": []}
 
-    return sum(trs[-14:]) / 14 if len(trs) >= 14 else 0
+    save_buffer(buf)
 
-def rsi(c, period=14):
-    gains, losses = [], []
+# ===== RISK =====
+def get_bet():
+    global balance, loss_streak
 
-    for i in range(1, len(c)):
-        diff = c[i]["c"] - c[i-1]["c"]
-        if diff > 0:
-            gains.append(diff)
-            losses.append(0)
-        else:
-            gains.append(0)
-            losses.append(abs(diff))
+    bet = balance * 0.1
 
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
+    if loss_streak >= 2:
+        bet *= 0.5
 
-    if avg_loss == 0:
-        return 100
-
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def strength(c):
-    l = c[-1]
-    return abs(l["c"]-l["o"]) / (l["h"]-l["l"]) if (l["h"]-l["l"]) else 0
-
-def structure(c):
-    if c[-1]["h"] > c[-2]["h"] and c[-1]["l"] > c[-2]["l"]:
-        return "UP"
-    if c[-1]["h"] < c[-2]["h"] and c[-1]["l"] < c[-2]["l"]:
-        return "DOWN"
-    return "RANGE"
-
-def levels(c):
-    highs = [x["h"] for x in c[-20:]]
-    lows = [x["l"] for x in c[-20:]]
-    return max(highs), min(lows)
-
-# ================= STATS =================
-
-def winrate():
-    total = stats["wins"] + stats["losses"]
-    if total == 0:
+    if daily_loss > balance * max_dd:
         return 0
-    return round((stats["wins"] / total) * 100, 2)
 
-def adapt():
-    total = stats["wins"] + stats["losses"]
+    return round(bet, 2)
 
-    if total < 20:
-        return
-
-    wr = winrate()
-
-    if wr < 50:
-        CONFIG["score_threshold"] -= 2
-        CONFIG["strength_limit"] -= 0.02
-
-    elif wr > 65:
-        CONFIG["score_threshold"] += 2
-        CONFIG["strength_limit"] += 0.02
-
-    CONFIG["score_threshold"] = max(60, min(85, CONFIG["score_threshold"]))
-    CONFIG["strength_limit"] = max(0.4, min(0.7, CONFIG["strength_limit"]))
-
-# ================= ENTRY =================
-
-def entry_ok(direction, c1):
-    prev = c1[-2]
-    last = c1[-1]
+# ===== TP/SL =====
+def calculate_tp_sl(df, direction):
+    last = df.iloc[-1]
 
     if direction == "BUY":
-        return prev["c"] < prev["o"] and last["c"] > last["o"]
+        sl = last["low"]
+        tp = last["close"] + (last["close"] - sl) * 2
     else:
-        return prev["c"] > prev["o"] and last["c"] < last["o"]
+        sl = last["high"]
+        tp = last["close"] - (sl - last["close"]) * 2
 
-# ================= CORE =================
+    return tp, sl
 
-def analyze():
-    c1 = get_candles("M1")
-    c5 = get_candles("M5")
-    c15 = get_candles("M15")
+# ===== SIGNAL =====
+def generate_signal():
+    if not session_filter():
+        return None, "Поза сесією", None, None, None
 
-    if not c1 or not c5 or not c15:
-        return None
+    feat, df = mtf_features()
 
-    e20 = ema(c15[-50:], 20)
-    e50 = ema(c15[-50:], 50)
+    if not volatility_filter(df):
+        return None, "Spike / новини", None, None, None
 
-    trend15 = structure(c15)
-    trend5 = structure(c5)
+    model, calib = load_model()
 
-    direction = "BUY" if e20 > e50 else "SELL"
+    raw = model.predict_proba(feat.reshape(1,-1))[0][1]
+    prob = calib.predict_proba([[raw]])[0][1]
 
-    score = 0
+    confidence = int(prob * 100)
 
-    if (e20 > e50 and trend15 == "UP") or (e20 < e50 and trend15 == "DOWN"):
-        score += 30
+    if confidence > 65:
+        direction = "BUY"
+    elif confidence < 35:
+        direction = "SELL"
+        confidence = 100 - confidence
+    else:
+        return None, "Немає edge", None, None, None
 
-    if trend5 == trend15:
-        score += 20
+    tp, sl = calculate_tp_sl(df, direction)
+    bet = get_bet()
 
-    if entry_ok(direction, c1):
-        score += 20
+    return direction, confidence, tp, sl, bet
 
-    if strength(c1) > CONFIG["strength_limit"]:
-        score += 10
-
-    r, s = levels(c15)
-    price = c1[-1]["c"]
-
-    if price > r - 0.0007 or price < s + 0.0007:
-        score += 10
-
-    rsi_val = rsi(c5)
-
-    if direction == "BUY" and rsi_val < 70:
-        score += 10
-    elif direction == "SELL" and rsi_val > 30:
-        score += 10
-
-    atr_val = atr(c15)
-    if (c1[-1]["h"] - c1[-1]["l"]) < atr_val * 1.5:
-        score += 10
-
-    last3 = c1[-3:]
-    if all(x["c"] > x["o"] for x in last3) or all(x["c"] < x["o"] for x in last3):
-        return None
-
-    if score < CONFIG["score_threshold"]:
-        return None
-
-    return {
-        "dir": direction,
-        "score": score
-    }
-
-# ================= UI =================
-
-def keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Прогноз", callback_data="signal")],
-        [InlineKeyboardButton("🤖 Авто", callback_data="auto")],
-        [InlineKeyboardButton("✅", callback_data="win"),
-         InlineKeyboardButton("❌", callback_data="loss")]
-    ])
-
+# ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    CHAT_IDS.add(update.effective_chat.id)
-    await update.message.reply_text("🔥 V14 PRO", reply_markup=keyboard())
+    await update.message.reply_text("🚀 V25 FINAL BOSS")
 
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global AUTO
+async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    direction, conf, tp, sl, bet = generate_signal()
 
-    q = update.callback_query
-    await q.answer()
+    if direction is None:
+        await update.message.reply_text(f"❌ {conf}")
+        return
 
-    if q.data == "signal":
-        s = analyze()
+    context.user_data["last_feat"] = mtf_features()[0]
 
-        if not s:
-            await q.edit_message_text("❌ Нема сетапу", reply_markup=keyboard())
-            return
+    await update.message.reply_text(
+        f"{'🔼 BUY' if direction=='BUY' else '🔻 SELL'}\n"
+        f"💵 {bet}\n"
+        f"📊 {conf}%\n"
+        f"🎯 TP: {round(tp,5)}\n"
+        f"🛑 SL: {round(sl,5)}"
+    )
 
-        msg = f"""
-🔥 V14 SIGNAL
+async def win(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global balance, loss_streak, daily_loss
 
-📊 EUR/USD
-{'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
+    feat = context.user_data.get("last_feat")
 
-📊 Score: {s['score']}%
-📊 Winrate: {winrate()}%
-"""
-        await q.edit_message_text(msg, reply_markup=keyboard())
+    if feat is not None:
+        update_model(feat, 1)
 
-    elif q.data == "auto":
-        AUTO = not AUTO
-        await q.edit_message_text(f"AUTO: {AUTO}", reply_markup=keyboard())
+    balance *= 1.08
+    loss_streak = 0
 
-    elif q.data == "win":
-        stats["wins"] += 1
-        adapt()
-        await q.answer("+")
+    await update.message.reply_text("✅ Win")
 
-    elif q.data == "loss":
-        stats["losses"] += 1
-        adapt()
-        await q.answer("-")
+async def loss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global balance, loss_streak, daily_loss
 
-# ================= LOOP =================
+    feat = context.user_data.get("last_feat")
 
-async def loop(app):
+    if feat is not None:
+        update_model(feat, 0)
+
+    balance *= 0.9
+    loss_streak += 1
+    daily_loss += 1
+
+    await update.message.reply_text("❌ Loss")
+
+# ===== AUTO =====
+async def auto(app):
     while True:
-        if AUTO:
-            s = analyze()
-            if s:
-                msg = f"""
-🔥 AUTO SIGNAL
+        direction, conf, tp, sl, bet = generate_signal()
 
-📊 EUR/USD
-{'🔼 BUY' if s['dir']=='BUY' else '🔻 SELL'}
+        if direction and conf > 70:
+            await app.bot.send_message(
+                chat_id=CHAT_ID,
+                text=f"{direction} | {conf}% | TP {round(tp,5)} | SL {round(sl,5)}"
+            )
 
-📊 Score: {s['score']}%
-📊 Winrate: {winrate()}%
-"""
-                for chat_id in CHAT_IDS:
-                    await app.bot.send_message(chat_id, msg)
+        await asyncio.sleep(300)
 
-        await asyncio.sleep(30)
-
-# ================= MAIN =================
-
+# ===== MAIN =====
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(CommandHandler("signal", signal))
+    app.add_handler(CommandHandler("win", win))
+    app.add_handler(CommandHandler("loss", loss))
 
-    async def post_init(app):
-        asyncio.get_event_loop().create_task(loop(app))
+    app.create_task(auto(app))
 
-    app.post_init = post_init
-
-    print("🔥 V14 PRO RUNNING")
     app.run_polling()
 
 if __name__ == "__main__":
