@@ -255,8 +255,6 @@ async def run_bot():
 
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("signal", signal))
-            app.add_handler(CommandHandler("win", win))
-            app.add_handler(CommandHandler("loss", loss))
 
             await app.initialize()
             await app.start()
