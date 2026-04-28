@@ -192,33 +192,54 @@ def rr(entry, tp, sl):
 def generate_signal():
     df1, df5, df15 = mtf_data()
 
+    # --- PATTERN ---
     pa = engulfing(df5) or pin_bar(df5) or breakout(df5) or fake_breakout(df5)
+
     if not pa:
         return None, "NO SETUP", None, None, None, None, None, None
 
+    # --- TREND FILTER ---
+    trend_up = df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1]
+
+    if pa == "BUY" and not trend_up:
+        return None, "AGAINST TREND", None, None, None, None, None, None
+
+    if pa == "SELL" and trend_up:
+        return None, "AGAINST TREND", None, None, None, None, None, None
+
+    # --- SCORE ---
     if indicator_score(df5) < 0:
         return None, "WEAK SCORE", None, None, None, None, None, None
 
+    # --- ML ---
     model, calib = load_model()
-    f = features(df1, df5, df15).reshape(1,-1)
+    f = features(df1, df5, df15).reshape(1, -1)
 
     raw = model.predict_proba(f)[0][1]
     prob = calib.predict_proba([[raw]])[0][1]
-    conf = int(prob*100)
+    conf = int(prob * 100)
 
+    # --- PRICE ---
     price = df5.iloc[-1]["close"]
-    sl = df5["low"].rolling(20).min().iloc[-1] if pa=="BUY" else df5["high"].rolling(20).max().iloc[-1]
-    tp = price + (price-sl)*2 if pa=="BUY" else price-(sl-price)*2
 
-    r = rr(price,tp,sl)
+    sl = df5["low"].rolling(20).min().iloc[-1] if pa == "BUY" else df5["high"].rolling(20).max().iloc[-1]
 
-    if conf>=70 and r>=1.5:
-        return pa,conf,tp,sl,r,"🔥 STRONG","ENTER",price
-    elif conf>=60 and r>=1.3:
-        return pa,conf,tp,sl,r,"⚖️ NORMAL","WAIT",price
+    if pa == "BUY":
+        tp = price + (price - sl) * 2
     else:
-        return pa,conf,tp,sl,r,"⚠️ WEAK","SKIP",price
+        tp = price - (sl - price) * 2
 
+    r = rr(price, tp, sl)
+
+    # --- DECISION ---
+    if conf >= 70 and r >= 1.5:
+        return pa, conf, tp, sl, r, "🔥 STRONG", "ENTER", price
+
+    elif conf >= 60 and r >= 1.3:
+        return pa, conf, tp, sl, r, "⚖️ NORMAL", "WAIT", price
+
+    else:
+        return pa, conf, tp, sl, r, "⚠️ WEAK", "SKIP", price
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 V31 READY")
