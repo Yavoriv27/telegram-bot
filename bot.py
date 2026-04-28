@@ -248,19 +248,30 @@ async def auto(app):
         await asyncio.sleep(240)
 
 # ===== MAIN =====
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+async def run_bot():
+    while True:
+        try:
+            app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("signal", signal))
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("signal", signal))
+            app.add_handler(CommandHandler("win", win))
+            app.add_handler(CommandHandler("loss", loss))
 
-    await app.initialize()
-    await app.start()
+            await app.initialize()
+            await app.start()
 
-    asyncio.create_task(auto(app))
+            asyncio.create_task(auto(app))
 
-    await app.updater.start_polling()
-    await asyncio.Event().wait()
+            print("✅ BOT STARTED")
+
+            await app.updater.start_polling()
+            await asyncio.Event().wait()
+
+        except Exception as e:
+            print("❌ BOT CRASH:", e)
+            await asyncio.sleep(5)  # пауза і рестарт
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_bot())
