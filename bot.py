@@ -196,7 +196,7 @@ def generate_signal():
     if not pa:
         return None, "NO SETUP", None, None, None, None, None, None
 
-    if indicator_score(df5) < 1:
+    if indicator_score(df5) < 0:
         return None, "WEAK SCORE", None, None, None, None, None, None
 
     model, calib = load_model()
@@ -212,9 +212,9 @@ def generate_signal():
 
     r = rr(price,tp,sl)
 
-    if conf>=80 and r>=2:
+    if conf>=70 and r>=1.5:
         return pa,conf,tp,sl,r,"🔥 STRONG","ENTER",price
-    elif conf>=70 and r>=1.5:
+    elif conf>=60 and r>=1.3:
         return pa,conf,tp,sl,r,"⚖️ NORMAL","WAIT",price
     else:
         return pa,conf,tp,sl,r,"⚠️ WEAK","SKIP",price
