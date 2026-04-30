@@ -140,9 +140,13 @@ def train():
     joblib.dump((model, scaler), MODEL_FILE)
 
 def load_model():
-    if not os.path.exists(MODEL_FILE):
-        print("TRAIN MODEL...")
-        train()
+    if os.path.exists(MODEL_FILE):
+        print("DELETE OLD MODEL")
+        os.remove(MODEL_FILE)
+
+    print("TRAIN NEW MODEL")
+    train()
+
     return joblib.load(MODEL_FILE)
 
 # ===== SIGNAL (без змін логіки) =====
