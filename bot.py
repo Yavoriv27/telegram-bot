@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 import pandas as pd
 import numpy as np
 import joblib
@@ -24,31 +25,42 @@ CHAT_IDS = [int(x) for x in os.getenv("CHAT_IDS", "").split(",") if x.strip().is
 PAIR = "EUR_USD"
 MODEL_FILE = "model_v31.pkl"
 CALIB_FILE = "calib_v31.pkl"
-BUFFER_FILE = "buffer.pkl"
 
 client = oandapyV20.API(access_token=OANDA_TOKEN, environment=ENV)
 
-# ===== DATA =====
+# ===== DATA (ANTI-CRASH) =====
 def get_candles(tf="M5", count=200):
-    r = instruments.InstrumentsCandles(
-        instrument=PAIR,
-        params={"granularity": tf, "count": count, "price": "M"}
-    )
-    client.request(r)
+    for _ in range(3):
+        try:
+            r = instruments.InstrumentsCandles(
+                instrument=PAIR,
+                params={"granularity": tf, "count": count, "price": "M"}
+            )
+            client.request(r)
 
-    data = []
-    for c in r.response["candles"]:
-        if c["complete"]:
-            data.append({
-                "open": float(c["mid"]["o"]),
-                "high": float(c["mid"]["h"]),
-                "low": float(c["mid"]["l"]),
-                "close": float(c["mid"]["c"]),
-            })
-    return pd.DataFrame(data)
+            data = []
+            for c in r.response["candles"]:
+                if c["complete"]:
+                    data.append({
+                        "open": float(c["mid"]["o"]),
+                        "high": float(c["mid"]["h"]),
+                        "low": float(c["mid"]["l"]),
+                        "close": float(c["mid"]["c"]),
+                    })
+
+            return pd.DataFrame(data)
+
+        except Exception as e:
+            print("⚠️ OANDA ERROR:", e)
+            time.sleep(1)
+
+    return pd.DataFrame()
 
 # ===== INDICATORS =====
 def add_indicators(df):
+    if df.empty:
+        return df
+
     df["ema20"] = df["close"].ewm(span=20).mean()
     df["ema50"] = df["close"].ewm(span=50).mean()
 
@@ -58,7 +70,6 @@ def add_indicators(df):
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
 
-    # ADX
     df["tr"] = df["high"] - df["low"]
     df["dm_plus"] = np.maximum(df["high"].diff(), 0)
     df["dm_minus"] = np.maximum(df["low"].diff(), 0)
@@ -71,11 +82,14 @@ def add_indicators(df):
     di_minus = 100 * (dm_minus14 / tr14)
 
     df["adx"] = (abs(di_plus - di_minus) / (di_plus + di_minus)) * 100
+    df["adx"] = df["adx"].fillna(0)
 
     return df
 
 # ===== PATTERNS =====
 def engulfing(df):
+    if len(df) < 2:
+        return None
     c1, c2 = df.iloc[-2], df.iloc[-1]
     if c2["close"] > c2["open"] and c1["close"] < c1["open"] and c2["close"] > c1["open"]:
         return "BUY"
@@ -156,20 +170,19 @@ def indicator_score(df):
 
     return score
 
-# ===== TRAIN =====
+# ===== MODEL =====
 def train_model():
-    df = add_indicators(get_candles("M5", 1200))
+    df = add_indicators(get_candles("M5", 1000))
 
     X, y = [], []
     for i in range(50, len(df)-5):
         sub = df.iloc[:i]
         X.append(features(sub, sub, sub))
-
         future = df["close"].iloc[i+4]
         current = df["close"].iloc[i]
         y.append(1 if future > current else 0)
 
-    model = RandomForestClassifier(n_estimators=300)
+    model = RandomForestClassifier(n_estimators=200)
     model.fit(X, y)
 
     probs = model.predict_proba(X)[:,1]
@@ -181,7 +194,9 @@ def train_model():
 
 def load_model():
     if not os.path.exists(MODEL_FILE):
+        print("⚠️ TRAIN MODEL...")
         train_model()
+        print("✅ MODEL READY")
     return joblib.load(MODEL_FILE), joblib.load(CALIB_FILE)
 
 # ===== RR =====
@@ -192,13 +207,14 @@ def rr(entry, tp, sl):
 def generate_signal():
     df1, df5, df15 = mtf_data()
 
-    # --- PATTERN ---
+    if df1.empty or df5.empty or df15.empty:
+        return None, "NO DATA", None, None, None, None, None, None
+
     pa = engulfing(df5) or pin_bar(df5) or breakout(df5) or fake_breakout(df5)
 
     if not pa:
         return None, "NO SETUP", None, None, None, None, None, None
 
-    # --- TREND FILTER ---
     trend_up = df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1]
 
     if pa == "BUY" and not trend_up:
@@ -207,42 +223,32 @@ def generate_signal():
     if pa == "SELL" and trend_up:
         return None, "AGAINST TREND", None, None, None, None, None, None
 
-    # --- SCORE ---
     if indicator_score(df5) < 0:
         return None, "WEAK SCORE", None, None, None, None, None, None
 
-    # --- ML ---
     model, calib = load_model()
-    f = features(df1, df5, df15).reshape(1, -1)
+    f = features(df1, df5, df15).reshape(1,-1)
 
     raw = model.predict_proba(f)[0][1]
     prob = calib.predict_proba([[raw]])[0][1]
-    conf = int(prob * 100)
+    conf = int(prob*100)
 
-    # --- PRICE ---
     price = df5.iloc[-1]["close"]
+    sl = df5["low"].rolling(20).min().iloc[-1] if pa=="BUY" else df5["high"].rolling(20).max().iloc[-1]
+    tp = price + (price-sl)*2 if pa=="BUY" else price-(sl-price)*2
 
-    sl = df5["low"].rolling(20).min().iloc[-1] if pa == "BUY" else df5["high"].rolling(20).max().iloc[-1]
+    r = rr(price,tp,sl)
 
-    if pa == "BUY":
-        tp = price + (price - sl) * 2
+    if conf>=70 and r>=1.5:
+        return pa,conf,tp,sl,r,"🔥 STRONG","ENTER",price
+    elif conf>=60 and r>=1.3:
+        return pa,conf,tp,sl,r,"⚖️ NORMAL","WAIT",price
     else:
-        tp = price - (sl - price) * 2
+        return pa,conf,tp,sl,r,"⚠️ WEAK","SKIP",price
 
-    r = rr(price, tp, sl)
-
-    # --- DECISION ---
-    if conf >= 70 and r >= 1.5:
-        return pa, conf, tp, sl, r, "🔥 STRONG", "ENTER", price
-
-    elif conf >= 60 and r >= 1.3:
-        return pa, conf, tp, sl, r, "⚖️ NORMAL", "WAIT", price
-
-    else:
-        return pa, conf, tp, sl, r, "⚠️ WEAK", "SKIP", price
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V31 READY")
+    await update.message.reply_text("🚀 V31 STABLE READY")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     res = generate_signal()
@@ -262,13 +268,16 @@ async def auto(app):
             res = generate_signal()
             if res[0] and res[6]=="ENTER":
                 for chat_id in CHAT_IDS:
-                    await app.bot.send_message(chat_id=chat_id, text=f"{res[0]} | {res[1]}% | RR {res[4]}")
+                    await app.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"{res[0]} | {res[1]}% | RR {res[4]}"
+                    )
         except Exception as e:
             print("ERR:", e)
 
         await asyncio.sleep(240)
 
-# ===== MAIN =====
+# ===== MAIN (ANTI-CRASH) =====
 async def run_bot():
     while True:
         try:
@@ -289,8 +298,7 @@ async def run_bot():
 
         except Exception as e:
             print("❌ BOT CRASH:", e)
-            await asyncio.sleep(5)  # пауза і рестарт
-
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
