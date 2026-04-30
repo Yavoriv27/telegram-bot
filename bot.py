@@ -4,9 +4,10 @@ import pandas as pd
 import numpy as np
 import joblib
 from datetime import datetime
+from collections import deque
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
@@ -14,12 +15,37 @@ import oandapyV20.endpoints.instruments as instruments
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
+# ===== CONFIG =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
 CHAT_ID = os.getenv("CHAT_ID")
 
 PAIR = "EUR_USD"
+LOG_FILE = "trades.csv"
+MODEL_FILE = "model.pkl"
+
 client = oandapyV20.API(access_token=OANDA_TOKEN)
+
+# ===== STATE =====
+results = deque(maxlen=300)
+balance = 1000.0
+loss_streak = 0
+last_signal = None
+
+weights = {
+    "ml": 1.0,
+    "pa": 1.0,
+    "trend": 1.0
+}
+
+# ===== SESSION FILTER =====
+def session_filter():
+    hour = datetime.utcnow().hour
+    if 6 <= hour <= 12:
+        return "LONDON"
+    elif 13 <= hour <= 18:
+        return "NEWYORK"
+    return "DEAD"
 
 # ===== DATA =====
 def get_candles(tf, count=200):
@@ -55,17 +81,9 @@ def add_indicators(df):
     df["rsi"] = 100 - (100 / (1 + rs))
 
     df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
-
     return df
 
-# ===== SUPPORT / RESISTANCE =====
-def levels(df):
-    recent = df.tail(20)
-    support = recent["low"].min()
-    resistance = recent["high"].max()
-    return support, resistance
-
-# ===== PRICE ACTION =====
+# ===== LOGIC =====
 def candle_dir(df):
     c = df.iloc[-3:]
     bull = sum(c["close"] > c["open"])
@@ -90,20 +108,9 @@ def pin_bar(df):
         return 1 if c["close"] > c["open"] else -1
     return 0
 
-# ===== FEATURE ENGINEERING =====
-def build_features(df1, df5, df15):
-    return np.array([
-        df1["close"].iloc[-1] - df1["close"].iloc[-3],
-        df5["close"].iloc[-1] - df5["close"].iloc[-3],
-        df15["close"].iloc[-1] - df15["close"].iloc[-3],
-        df5["ema20"].iloc[-1] - df5["ema50"].iloc[-1],
-        df5["rsi"].iloc[-1],
-        df5["atr"].iloc[-1]
-    ])
-
 # ===== MODEL =====
 def train():
-    df = add_indicators(get_candles("M5", 600))
+    df = add_indicators(get_candles("M5", 800))
     X, y = [], []
 
     for i in range(50, len(df)-3):
@@ -119,18 +126,58 @@ def train():
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
 
-    model = RandomForestClassifier(n_estimators=200)
+    model = RandomForestClassifier(n_estimators=250)
     model.fit(X, y)
 
-    joblib.dump((model, scaler), "model.pkl")
+    joblib.dump((model, scaler), MODEL_FILE)
 
 def load_model():
-    if not os.path.exists("model.pkl"):
+    if not os.path.exists(MODEL_FILE):
         train()
-    return joblib.load("model.pkl")
+    return joblib.load(MODEL_FILE)
+
+# ===== ONLINE LEARNING =====
+def retrain_if_needed():
+    if not os.path.exists(LOG_FILE):
+        return
+
+    df = pd.read_csv(LOG_FILE)
+
+    if len(df) < 50:
+        return
+
+    if len(df) % 20 == 0:
+        train()
+
+# ===== ADAPTIVE =====
+def adaptive_threshold():
+    if len(results) < 30:
+        return 3
+
+    wr = sum(results)/len(results)
+
+    if wr > 0.65:
+        return 2.5
+    elif wr < 0.4:
+        return 4
+    return 3
+
+def adjust_weights(win):
+    if win:
+        weights["pa"] += 0.05
+    else:
+        weights["ml"] += 0.05
 
 # ===== SIGNAL =====
 def signal():
+    global loss_streak
+
+    if loss_streak >= 3:
+        return None, "PAUSE AFTER LOSSES"
+
+    if session_filter() == "DEAD":
+        return None, "BAD SESSION"
+
     df1 = add_indicators(get_candles("M1"))
     df5 = add_indicators(get_candles("M5"))
     df15 = add_indicators(get_candles("M15"))
@@ -140,68 +187,113 @@ def signal():
 
     model, scaler = load_model()
 
-    feat = build_features(df1, df5, df15).reshape(1, -1)
-    feat = scaler.transform(feat)
+    feat = np.array([
+        df1["close"].iloc[-1] - df1["close"].iloc[-3],
+        df5["close"].iloc[-1] - df5["close"].iloc[-3],
+        df15["close"].iloc[-1] - df15["close"].iloc[-3],
+        df5["ema20"].iloc[-1] - df5["ema50"].iloc[-1],
+        df5["rsi"].iloc[-1],
+        df5["atr"].iloc[-1]
+    ]).reshape(1, -1)
 
+    feat = scaler.transform(feat)
     prob = model.predict_proba(feat)[0][1]
     conf = int(prob * 100)
 
-    score = 0
+    score = (prob - 0.5) * 6 * weights["ml"]
+    score += (2 if df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1] else -2) * weights["trend"]
+    score += (candle_dir(df1) + candle_dir(df5) + candle_dir(df15)) * weights["pa"]
+    score += engulfing(df5)*2 + pin_bar(df5)
 
-    # ML
-    score += (prob - 0.5) * 6
+    if df5["atr"].iloc[-1] < df5["atr"].mean()*0.7:
+        return None, "LOW VOL"
 
-    # Trend
-    score += 2 if df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1] else -2
-
-    # PA
-    score += candle_dir(df1) + candle_dir(df5) + candle_dir(df15)
-
-    # Patterns
-    score += engulfing(df5) * 2 + pin_bar(df5)
-
-    # Levels
-    sup, res = levels(df5)
-    price = df5["close"].iloc[-1]
-    if price < sup * 1.002:
-        score += 1
-    if price > res * 0.998:
-        score -= 1
-
-    # Kill filter
-    if abs(score) < 3:
+    if abs(score) < adaptive_threshold():
         return None, "NO EDGE"
 
     direction = "BUY" if score > 0 else "SELL"
 
+    price = df5["close"].iloc[-1]
     atr = df5["atr"].iloc[-1]
-    sl = price - atr if direction == "BUY" else price + atr
-    tp = price + atr * 1.7 if direction == "BUY" else price - atr * 1.7
 
-    return direction, conf, round(tp,5), round(sl,5)
+    # dynamic risk
+    risk = 0.05 if loss_streak > 0 else 0.1
+
+    tp = price + atr*1.8 if direction == "BUY" else price - atr*1.8
+    sl = price - atr if direction == "BUY" else price + atr
+
+    return direction, conf, round(tp,5), round(sl,5), risk
 
 # ===== JOURNAL =====
-def log_trade(res):
-    with open("trades.log", "a") as f:
-        f.write(f"{datetime.now()} | {res}\n")
+def log_trade(direction, conf, result):
+    df = pd.DataFrame([{
+        "time": datetime.now(),
+        "direction": direction,
+        "confidence": conf,
+        "result": result,
+        "balance": balance
+    }])
+    if not os.path.exists(LOG_FILE):
+        df.to_csv(LOG_FILE, index=False)
+    else:
+        df.to_csv(LOG_FILE, mode="a", header=False, index=False)
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 V50 PRO MAX")
+    await update.message.reply_text("🚀 V90 FINAL READY")
 
-async def sig(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_signal
+
+    retrain_if_needed()
+
     res = signal()
 
     if res[0] is None:
         await update.message.reply_text(f"❌ {res[1]}")
         return
 
-    log_trade(res)
+    last_signal = res
 
-    d, c, tp, sl = res
+    keyboard = [[
+        InlineKeyboardButton("✅ Плюс", callback_data="win"),
+        InlineKeyboardButton("❌ Мінус", callback_data="loss")
+    ]]
+
+    d, c, tp, sl, r = res
 
     await update.message.reply_text(
-        f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+        f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}\nRISK: {int(r*100)}%",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def result_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global balance, loss_streak
+
+    query = update.callback_query
+    await query.answer()
+
+    d, c, tp, sl, r = last_signal
+
+    if query.data == "win":
+        results.append(1)
+        balance += balance*r
+        loss_streak = 0
+        adjust_weights(True)
+        log_trade(d, c, "win")
+    else:
+        results.append(0)
+        balance -= balance*r
+        loss_streak += 1
+        adjust_weights(False)
+        log_trade(d, c, "loss")
+
+    total = len(results)
+    wins = sum(results)
+    wr = int((wins/total)*100) if total else 0
+
+    await query.edit_message_text(
+        f"💰 Balance: {round(balance,2)}\nTrades: {total}\nWinrate: {wr}%\nLoss streak: {loss_streak}"
     )
 
 # ===== AUTO =====
@@ -210,11 +302,7 @@ async def auto(app):
         try:
             res = signal()
             if res[0]:
-                log_trade(res)
-                await app.bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=f"{res[0]} | {res[1]}%"
-                )
+                await app.bot.send_message(chat_id=CHAT_ID, text=f"{res[0]} | {res[1]}%")
         except:
             pass
 
@@ -225,14 +313,14 @@ async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("signal", sig))
+    app.add_handler(CommandHandler("signal", signal_cmd))
+    app.add_handler(CallbackQueryHandler(result_handler))
 
     await app.initialize()
     await app.start()
 
     asyncio.create_task(auto(app))
 
-    await app.updater.start_polling()
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
