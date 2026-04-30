@@ -118,18 +118,23 @@ def pin_bar(df):
 
 # ===== MODEL (без змін) =====
 def train():
-    df = add_indicators(get_candles("M5", 800))
+    df1 = add_indicators(get_candles("M1", 800))
+    df5 = add_indicators(get_candles("M5", 800))
+    df15 = add_indicators(get_candles("M15", 800))
+
     X, y = [], []
 
-    for i in range(50, len(df)-3):
-        sub = df.iloc[:i]
+    for i in range(50, len(df5)-3):
         X.append([
-            sub["close"].iloc[-1] - sub["close"].iloc[-3],
-            sub["ema20"].iloc[-1] - sub["ema50"].iloc[-1],
-            sub["rsi"].iloc[-1],
-            sub["atr"].iloc[-1]
+            df1["close"].iloc[i] - df1["close"].iloc[i-3],
+            df5["close"].iloc[i] - df5["close"].iloc[i-3],
+            df15["close"].iloc[i] - df15["close"].iloc[i-3],
+            df5["ema20"].iloc[i] - df5["ema50"].iloc[i],
+            df5["rsi"].iloc[i],
+            df5["atr"].iloc[i]
         ])
-        y.append(1 if df["close"].iloc[i+2] > df["close"].iloc[i] else 0)
+
+        y.append(1 if df5["close"].iloc[i+2] > df5["close"].iloc[i] else 0)
 
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
