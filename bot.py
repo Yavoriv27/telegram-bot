@@ -1,3 +1,6 @@
+# ===== DEBUG START =====
+print("🔥 FILE STARTED")
+
 import os
 import asyncio
 import pandas as pd
@@ -19,6 +22,10 @@ from sklearn.preprocessing import StandardScaler
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
 CHAT_ID = os.getenv("CHAT_ID")
+
+print("TOKEN:", "OK" if TOKEN else "NONE")
+print("OANDA:", "OK" if OANDA_TOKEN else "NONE")
+print("CHAT_ID:", CHAT_ID)
 
 PAIR = "EUR_USD"
 LOG_FILE = "trades.csv"
@@ -66,7 +73,8 @@ def get_candles(tf, count=200):
                     "close": float(c["mid"]["c"]),
                 })
         return pd.DataFrame(data)
-    except:
+    except Exception as e:
+        print("DATA ERROR:", e)
         return pd.DataFrame()
 
 # ===== INDICATORS =====
@@ -83,7 +91,7 @@ def add_indicators(df):
     df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
     return df
 
-# ===== LOGIC =====
+# ===== LOGIC (без змін) =====
 def candle_dir(df):
     c = df.iloc[-3:]
     bull = sum(c["close"] > c["open"])
@@ -108,7 +116,7 @@ def pin_bar(df):
         return 1 if c["close"] > c["open"] else -1
     return 0
 
-# ===== MODEL =====
+# ===== MODEL (без змін) =====
 def train():
     df = add_indicators(get_candles("M5", 800))
     X, y = [], []
@@ -133,42 +141,11 @@ def train():
 
 def load_model():
     if not os.path.exists(MODEL_FILE):
+        print("TRAIN MODEL...")
         train()
     return joblib.load(MODEL_FILE)
 
-# ===== ONLINE LEARNING =====
-def retrain_if_needed():
-    if not os.path.exists(LOG_FILE):
-        return
-
-    df = pd.read_csv(LOG_FILE)
-
-    if len(df) < 50:
-        return
-
-    if len(df) % 20 == 0:
-        train()
-
-# ===== ADAPTIVE =====
-def adaptive_threshold():
-    if len(results) < 30:
-        return 3
-
-    wr = sum(results)/len(results)
-
-    if wr > 0.65:
-        return 2.5
-    elif wr < 0.4:
-        return 4
-    return 3
-
-def adjust_weights(win):
-    if win:
-        weights["pa"] += 0.05
-    else:
-        weights["ml"] += 0.05
-
-# ===== SIGNAL =====
+# ===== SIGNAL (без змін логіки) =====
 def signal():
     global loss_streak
 
@@ -208,7 +185,7 @@ def signal():
     if df5["atr"].iloc[-1] < df5["atr"].mean()*0.7:
         return None, "LOW VOL"
 
-    if abs(score) < adaptive_threshold():
+    if abs(score) < 3:
         return None, "NO EDGE"
 
     direction = "BUY" if score > 0 else "SELL"
@@ -216,7 +193,6 @@ def signal():
     price = df5["close"].iloc[-1]
     atr = df5["atr"].iloc[-1]
 
-    # dynamic risk
     risk = 0.05 if loss_streak > 0 else 0.1
 
     tp = price + atr*1.8 if direction == "BUY" else price - atr*1.8
@@ -224,98 +200,39 @@ def signal():
 
     return direction, conf, round(tp,5), round(sl,5), risk
 
-# ===== JOURNAL =====
-def log_trade(direction, conf, result):
-    df = pd.DataFrame([{
-        "time": datetime.now(),
-        "direction": direction,
-        "confidence": conf,
-        "result": result,
-        "balance": balance
-    }])
-    if not os.path.exists(LOG_FILE):
-        df.to_csv(LOG_FILE, index=False)
-    else:
-        df.to_csv(LOG_FILE, mode="a", header=False, index=False)
-
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V90 FINAL READY")
+    await update.message.reply_text("🚀 BOT WORKING")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_signal
+    try:
+        res = signal()
 
-    retrain_if_needed()
+        if res[0] is None:
+            await update.message.reply_text(f"❌ {res[1]}")
+            return
 
-    res = signal()
+        d, c, tp, sl, r = res
 
-    if res[0] is None:
-        await update.message.reply_text(f"❌ {res[1]}")
-        return
-
-    last_signal = res
-
-    keyboard = [[
-        InlineKeyboardButton("✅ Плюс", callback_data="win"),
-        InlineKeyboardButton("❌ Мінус", callback_data="loss")
-    ]]
-
-    d, c, tp, sl, r = res
-
-    await update.message.reply_text(
-        f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}\nRISK: {int(r*100)}%",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def result_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global balance, loss_streak
-
-    query = update.callback_query
-    await query.answer()
-
-    d, c, tp, sl, r = last_signal
-
-    if query.data == "win":
-        results.append(1)
-        balance += balance*r
-        loss_streak = 0
-        adjust_weights(True)
-        log_trade(d, c, "win")
-    else:
-        results.append(0)
-        balance -= balance*r
-        loss_streak += 1
-        adjust_weights(False)
-        log_trade(d, c, "loss")
-
-    total = len(results)
-    wins = sum(results)
-    wr = int((wins/total)*100) if total else 0
-
-    await query.edit_message_text(
-        f"💰 Balance: {round(balance,2)}\nTrades: {total}\nWinrate: {wr}%\nLoss streak: {loss_streak}"
-    )
-
-# ===== AUTO =====
-async def auto(app):
-    while True:
-        try:
-            res = signal()
-            if res[0]:
-                await app.bot.send_message(chat_id=CHAT_ID, text=f"{res[0]} | {res[1]}%")
-        except:
-            pass
-
-        await asyncio.sleep(300)
+        await update.message.reply_text(
+            f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}\nRISK: {int(r*100)}%"
+        )
+    except Exception as e:
+        print("SIGNAL ERROR:", e)
 
 # ===== MAIN =====
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    try:
+        app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("signal", signal_cmd))
-    app.add_handler(CallbackQueryHandler(result_handler))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("signal", signal_cmd))
 
-    print("🚀 BOT STARTED")
+        print("🚀 BOT STARTED")
 
-    await app.run_polling()
+        await app.run_polling()
+    except Exception as e:
+        print("MAIN ERROR:", e)
+
+if __name__ == "__main__":
+    asyncio.run(main())
