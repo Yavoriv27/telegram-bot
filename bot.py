@@ -221,7 +221,7 @@ async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("SIGNAL ERROR:", e)
 
 # ===== MAIN =====
-async def main():
+def main():
     try:
         app = ApplicationBuilder().token(TOKEN).build()
 
@@ -230,9 +230,11 @@ async def main():
 
         print("🚀 BOT STARTED")
 
-        await app.run_polling()
+        app.run_polling()
+
     except Exception as e:
         print("MAIN ERROR:", e)
 
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
