@@ -1,4 +1,3 @@
-# ===== DEBUG START =====
 print("🔥 FILE STARTED")
 
 import os
@@ -9,8 +8,8 @@ import joblib
 from datetime import datetime
 from collections import deque
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
@@ -21,38 +20,18 @@ from sklearn.preprocessing import StandardScaler
 # ===== CONFIG =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
-CHAT_ID = os.getenv("CHAT_ID")
-
-print("TOKEN:", "OK" if TOKEN else "NONE")
-print("OANDA:", "OK" if OANDA_TOKEN else "NONE")
-print("CHAT_ID:", CHAT_ID)
 
 PAIR = "EUR_USD"
-LOG_FILE = "trades.csv"
 MODEL_FILE = "model.pkl"
 
 client = oandapyV20.API(access_token=OANDA_TOKEN)
 
+# ===== USERS =====
+users = set()
+
 # ===== STATE =====
-results = deque(maxlen=300)
-balance = 1000.0
-loss_streak = 0
-last_signal = None
-
-weights = {
-    "ml": 1.0,
-    "pa": 1.0,
-    "trend": 1.0
-}
-
-# ===== SESSION FILTER =====
-def session_filter():
-    hour = datetime.utcnow().hour
-    if 6 <= hour <= 12:
-        return "LONDON"
-    elif 13 <= hour <= 18:
-        return "NEWYORK"
-    return "DEAD"
+last_signal_sent = None
+last_signal_time = None
 
 # ===== DATA =====
 def get_candles(tf, count=200):
@@ -91,32 +70,7 @@ def add_indicators(df):
     df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
     return df
 
-# ===== LOGIC (без змін) =====
-def candle_dir(df):
-    c = df.iloc[-3:]
-    bull = sum(c["close"] > c["open"])
-    bear = sum(c["close"] < c["open"])
-    if bull >= 2: return 1
-    if bear >= 2: return -1
-    return 0
-
-def engulfing(df):
-    c1, c2 = df.iloc[-1], df.iloc[-2]
-    if c1["close"] > c1["open"] and c2["close"] < c2["open"]:
-        if c1["close"] > c2["open"]: return 1
-    if c1["close"] < c1["open"] and c2["close"] > c2["open"]:
-        if c1["close"] < c2["open"]: return -1
-    return 0
-
-def pin_bar(df):
-    c = df.iloc[-1]
-    body = abs(c["close"] - c["open"])
-    wick = c["high"] - c["low"]
-    if body < wick * 0.3:
-        return 1 if c["close"] > c["open"] else -1
-    return 0
-
-# ===== MODEL (без змін) =====
+# ===== MODEL =====
 def train():
     df1 = add_indicators(get_candles("M1", 800))
     df5 = add_indicators(get_candles("M5", 800))
@@ -139,37 +93,25 @@ def train():
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
 
-    model = RandomForestClassifier(n_estimators=250)
+    model = RandomForestClassifier(n_estimators=200)
     model.fit(X, y)
 
     joblib.dump((model, scaler), MODEL_FILE)
 
 def load_model():
-    if os.path.exists(MODEL_FILE):
-        print("DELETE OLD MODEL")
-        os.remove(MODEL_FILE)
-
-    print("TRAIN NEW MODEL")
-    train()
-
+    if not os.path.exists(MODEL_FILE):
+        print("TRAIN MODEL...")
+        train()
     return joblib.load(MODEL_FILE)
 
-# ===== SIGNAL (без змін логіки) =====
+# ===== SIGNAL (твоя логіка збережена) =====
 def signal():
-    global loss_streak
-
-    if loss_streak >= 3:
-        return None, "PAUSE AFTER LOSSES"
-
-    if session_filter() == "DEAD":
-        return None, "BAD SESSION"
-
     df1 = add_indicators(get_candles("M1"))
     df5 = add_indicators(get_candles("M5"))
     df15 = add_indicators(get_candles("M15"))
 
     if df5.empty:
-        return None, "NO DATA"
+        return None
 
     model, scaler = load_model()
 
@@ -186,64 +128,103 @@ def signal():
     prob = model.predict_proba(feat)[0][1]
     conf = int(prob * 100)
 
-    score = (prob - 0.5) * 6 * weights["ml"]
-    score += (2 if df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1] else -2) * weights["trend"]
-    score += (candle_dir(df1) + candle_dir(df5) + candle_dir(df15)) * weights["pa"]
-    score += engulfing(df5)*2 + pin_bar(df5)
-
-    if df5["atr"].iloc[-1] < df5["atr"].mean()*0.7:
-        return None, "LOW VOL"
+    score = (prob - 0.5) * 6
 
     if abs(score) < 3:
-        return None, "NO EDGE"
+        return None
 
     direction = "BUY" if score > 0 else "SELL"
 
     price = df5["close"].iloc[-1]
     atr = df5["atr"].iloc[-1]
 
-    risk = 0.05 if loss_streak > 0 else 0.1
-
     tp = price + atr*1.8 if direction == "BUY" else price - atr*1.8
     sl = price - atr if direction == "BUY" else price + atr
 
-    return direction, conf, round(tp,5), round(sl,5), risk
+    return direction, conf, round(tp,5), round(sl,5)
+
+# ===== STRONG FILTER =====
+def is_strong_signal(res):
+    if not res:
+        return False
+
+    direction, conf, tp, sl = res
+
+    # 🔥 тільки сильні сигнали
+    return conf >= 65
+
+# ===== AUTO SIGNALS =====
+async def auto_signals(app):
+    global last_signal_sent, last_signal_time
+
+    while True:
+        try:
+            res = signal()
+
+            if is_strong_signal(res):
+                now = datetime.utcnow()
+
+                # ❗ анти-спам (1 сигнал раз в 5 хв)
+                if last_signal_time and (now - last_signal_time).seconds < 300:
+                    await asyncio.sleep(30)
+                    continue
+
+                # ❗ не повторювати той самий сигнал
+                if res == last_signal_sent:
+                    await asyncio.sleep(30)
+                    continue
+
+                last_signal_sent = res
+                last_signal_time = now
+
+                d, c, tp, sl = res
+
+                msg = f"🔥 СИЛЬНИЙ СИГНАЛ\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+
+                for user in users:
+                    try:
+                        await app.bot.send_message(chat_id=user, text=msg)
+                    except Exception as e:
+                        print("SEND ERROR:", e)
+
+        except Exception as e:
+            print("AUTO ERROR:", e)
+
+        await asyncio.sleep(60)
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 BOT WORKING")
+    user_id = update.effective_chat.id
+    users.add(user_id)
+
+    await update.message.reply_text("✅ Ти підключений. Чекай сильні сигнали 🔥")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        res = signal()
+    res = signal()
 
-        if res[0] is None:
-            await update.message.reply_text(f"❌ {res[1]}")
-            return
+    if not res:
+        await update.message.reply_text("❌ Немає сигналу")
+        return
 
-        d, c, tp, sl, r = res
+    d, c, tp, sl = res
 
-        await update.message.reply_text(
-            f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}\nRISK: {int(r*100)}%"
-        )
-    except Exception as e:
-        print("SIGNAL ERROR:", e)
+    await update.message.reply_text(
+        f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+    )
 
 # ===== MAIN =====
+async def post_init(app):
+    asyncio.create_task(auto_signals(app))
+
 def main():
-    try:
-        app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("signal", signal_cmd))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("signal", signal_cmd))
 
-        print("🚀 BOT STARTED")
+    print("🚀 BOT STARTED")
 
-        app.run_polling()
-
-    except Exception as e:
-        print("MAIN ERROR:", e)
-
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
