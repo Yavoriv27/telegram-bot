@@ -316,12 +316,6 @@ async def main():
     app.add_handler(CommandHandler("signal", signal_cmd))
     app.add_handler(CallbackQueryHandler(result_handler))
 
-    await app.initialize()
-    await app.start()
+    print("🚀 BOT STARTED")
 
-    asyncio.create_task(auto(app))
-
-    await asyncio.Event().wait()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await app.run_polling()
