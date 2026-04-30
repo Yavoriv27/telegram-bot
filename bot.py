@@ -1,66 +1,50 @@
 import os
 import asyncio
-import time
 import pandas as pd
 import numpy as np
 import joblib
 from datetime import datetime
 
-import oandapyV20
-import oandapyV20.endpoints.instruments as instruments
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
+import oandapyV20
+import oandapyV20.endpoints.instruments as instruments
 
-# ===== ENV =====
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
-ENV = os.getenv("OANDA_ENV", "practice")
-
-CHAT_IDS = [int(x) for x in os.getenv("CHAT_IDS", "").split(",") if x.strip().isdigit()]
+CHAT_ID = os.getenv("CHAT_ID")
 
 PAIR = "EUR_USD"
-MODEL_FILE = "model_v31.pkl"
-CALIB_FILE = "calib_v31.pkl"
+client = oandapyV20.API(access_token=OANDA_TOKEN)
 
-client = oandapyV20.API(access_token=OANDA_TOKEN, environment=ENV)
+# ===== DATA =====
+def get_candles(tf, count=200):
+    try:
+        r = instruments.InstrumentsCandles(
+            instrument=PAIR,
+            params={"granularity": tf, "count": count, "price": "M"}
+        )
+        client.request(r)
 
-# ===== DATA (ANTI-CRASH) =====
-def get_candles(tf="M5", count=200):
-    for _ in range(3):
-        try:
-            r = instruments.InstrumentsCandles(
-                instrument=PAIR,
-                params={"granularity": tf, "count": count, "price": "M"}
-            )
-            client.request(r)
-
-            data = []
-            for c in r.response["candles"]:
-                if c["complete"]:
-                    data.append({
-                        "open": float(c["mid"]["o"]),
-                        "high": float(c["mid"]["h"]),
-                        "low": float(c["mid"]["l"]),
-                        "close": float(c["mid"]["c"]),
-                    })
-
-            return pd.DataFrame(data)
-
-        except Exception as e:
-            print("⚠️ OANDA ERROR:", e)
-            time.sleep(1)
-
-    return pd.DataFrame()
+        data = []
+        for c in r.response["candles"]:
+            if c["complete"]:
+                data.append({
+                    "open": float(c["mid"]["o"]),
+                    "high": float(c["mid"]["h"]),
+                    "low": float(c["mid"]["l"]),
+                    "close": float(c["mid"]["c"]),
+                })
+        return pd.DataFrame(data)
+    except:
+        return pd.DataFrame()
 
 # ===== INDICATORS =====
 def add_indicators(df):
-    if df.empty:
-        return df
-
     df["ema20"] = df["close"].ewm(span=20).mean()
     df["ema50"] = df["close"].ewm(span=50).mean()
 
@@ -70,235 +54,186 @@ def add_indicators(df):
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
 
-    df["tr"] = df["high"] - df["low"]
-    df["dm_plus"] = np.maximum(df["high"].diff(), 0)
-    df["dm_minus"] = np.maximum(df["low"].diff(), 0)
-
-    tr14 = df["tr"].rolling(14).mean()
-    dm_plus14 = df["dm_plus"].rolling(14).mean()
-    dm_minus14 = df["dm_minus"].rolling(14).mean()
-
-    di_plus = 100 * (dm_plus14 / tr14)
-    di_minus = 100 * (dm_minus14 / tr14)
-
-    df["adx"] = (abs(di_plus - di_minus) / (di_plus + di_minus)) * 100
-    df["adx"] = df["adx"].fillna(0)
+    df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
 
     return df
 
-# ===== PATTERNS =====
+# ===== SUPPORT / RESISTANCE =====
+def levels(df):
+    recent = df.tail(20)
+    support = recent["low"].min()
+    resistance = recent["high"].max()
+    return support, resistance
+
+# ===== PRICE ACTION =====
+def candle_dir(df):
+    c = df.iloc[-3:]
+    bull = sum(c["close"] > c["open"])
+    bear = sum(c["close"] < c["open"])
+    if bull >= 2: return 1
+    if bear >= 2: return -1
+    return 0
+
 def engulfing(df):
-    if len(df) < 2:
-        return None
-    c1, c2 = df.iloc[-2], df.iloc[-1]
-    if c2["close"] > c2["open"] and c1["close"] < c1["open"] and c2["close"] > c1["open"]:
-        return "BUY"
-    if c2["close"] < c2["open"] and c1["close"] > c1["open"] and c2["close"] < c1["open"]:
-        return "SELL"
-    return None
+    c1, c2 = df.iloc[-1], df.iloc[-2]
+    if c1["close"] > c1["open"] and c2["close"] < c2["open"]:
+        if c1["close"] > c2["open"]: return 1
+    if c1["close"] < c1["open"] and c2["close"] > c2["open"]:
+        if c1["close"] < c2["open"]: return -1
+    return 0
 
 def pin_bar(df):
     c = df.iloc[-1]
     body = abs(c["close"] - c["open"])
-    wick_up = c["high"] - max(c["close"], c["open"])
-    wick_down = min(c["close"], c["open"]) - c["low"]
+    wick = c["high"] - c["low"]
+    if body < wick * 0.3:
+        return 1 if c["close"] > c["open"] else -1
+    return 0
 
-    if wick_down > body * 2:
-        return "BUY"
-    if wick_up > body * 2:
-        return "SELL"
-    return None
-
-def breakout(df):
-    high = df["high"].rolling(20).max().iloc[-2]
-    low = df["low"].rolling(20).min().iloc[-2]
-    last = df.iloc[-1]
-
-    if last["close"] > high:
-        return "BUY"
-    if last["close"] < low:
-        return "SELL"
-    return None
-
-def fake_breakout(df):
-    high = df["high"].rolling(20).max().iloc[-2]
-    low = df["low"].rolling(20).min().iloc[-2]
-    last = df.iloc[-1]
-
-    if last["high"] > high and last["close"] < high:
-        return "SELL"
-    if last["low"] < low and last["close"] > low:
-        return "BUY"
-    return None
-
-# ===== MTF =====
-def mtf_data():
-    df1 = add_indicators(get_candles("M1", 120))
-    df5 = add_indicators(get_candles("M5", 120))
-    df15 = add_indicators(get_candles("M15", 120))
-    return df1, df5, df15
-
-# ===== FEATURES =====
-def features(df1, df5, df15):
-    def f(df):
-        return [
-            df["close"].iloc[-1] - df["close"].iloc[-5],
-            df["ema20"].iloc[-1] - df["ema50"].iloc[-1],
-            df["rsi"].iloc[-1],
-            df["adx"].iloc[-1]
-        ]
-    return np.array(f(df1) + f(df5) + f(df15))
-
-# ===== SCORE =====
-def indicator_score(df):
-    score = 0
-
-    score += 3 if df["ema20"].iloc[-1] > df["ema50"].iloc[-1] else -3
-
-    if df["rsi"].iloc[-1] > 60:
-        score += 2
-    elif df["rsi"].iloc[-1] < 40:
-        score -= 2
-
-    if df["adx"].iloc[-1] > 25:
-        score += 2
-
-    if df["close"].iloc[-1] > df["close"].iloc[-3]:
-        score += 1
-    else:
-        score -= 1
-
-    return score
+# ===== FEATURE ENGINEERING =====
+def build_features(df1, df5, df15):
+    return np.array([
+        df1["close"].iloc[-1] - df1["close"].iloc[-3],
+        df5["close"].iloc[-1] - df5["close"].iloc[-3],
+        df15["close"].iloc[-1] - df15["close"].iloc[-3],
+        df5["ema20"].iloc[-1] - df5["ema50"].iloc[-1],
+        df5["rsi"].iloc[-1],
+        df5["atr"].iloc[-1]
+    ])
 
 # ===== MODEL =====
-def train_model():
-    df = add_indicators(get_candles("M5", 1000))
-
+def train():
+    df = add_indicators(get_candles("M5", 600))
     X, y = [], []
-    for i in range(50, len(df)-5):
+
+    for i in range(50, len(df)-3):
         sub = df.iloc[:i]
-        X.append(features(sub, sub, sub))
-        future = df["close"].iloc[i+4]
-        current = df["close"].iloc[i]
-        y.append(1 if future > current else 0)
+        X.append([
+            sub["close"].iloc[-1] - sub["close"].iloc[-3],
+            sub["ema20"].iloc[-1] - sub["ema50"].iloc[-1],
+            sub["rsi"].iloc[-1],
+            sub["atr"].iloc[-1]
+        ])
+        y.append(1 if df["close"].iloc[i+2] > df["close"].iloc[i] else 0)
+
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
 
     model = RandomForestClassifier(n_estimators=200)
     model.fit(X, y)
 
-    probs = model.predict_proba(X)[:,1]
-    calib = LogisticRegression()
-    calib.fit(probs.reshape(-1,1), y)
-
-    joblib.dump(model, MODEL_FILE)
-    joblib.dump(calib, CALIB_FILE)
+    joblib.dump((model, scaler), "model.pkl")
 
 def load_model():
-    if not os.path.exists(MODEL_FILE):
-        print("⚠️ TRAIN MODEL...")
-        train_model()
-        print("✅ MODEL READY")
-    return joblib.load(MODEL_FILE), joblib.load(CALIB_FILE)
-
-# ===== RR =====
-def rr(entry, tp, sl):
-    return round(abs(tp-entry)/abs(entry-sl),2) if entry!=sl else 0
+    if not os.path.exists("model.pkl"):
+        train()
+    return joblib.load("model.pkl")
 
 # ===== SIGNAL =====
-def generate_signal():
-    df1, df5, df15 = mtf_data()
+def signal():
+    df1 = add_indicators(get_candles("M1"))
+    df5 = add_indicators(get_candles("M5"))
+    df15 = add_indicators(get_candles("M15"))
 
-    if df1.empty or df5.empty or df15.empty:
-        return None, "NO DATA", None, None, None, None, None, None
+    if df5.empty:
+        return None, "NO DATA"
 
-    pa = engulfing(df5) or pin_bar(df5) or breakout(df5) or fake_breakout(df5)
+    model, scaler = load_model()
 
-    if not pa:
-        return None, "NO SETUP", None, None, None, None, None, None
+    feat = build_features(df1, df5, df15).reshape(1, -1)
+    feat = scaler.transform(feat)
 
-    trend_up = df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1]
+    prob = model.predict_proba(feat)[0][1]
+    conf = int(prob * 100)
 
-    if pa == "BUY" and not trend_up:
-        return None, "AGAINST TREND", None, None, None, None, None, None
+    score = 0
 
-    if pa == "SELL" and trend_up:
-        return None, "AGAINST TREND", None, None, None, None, None, None
+    # ML
+    score += (prob - 0.5) * 6
 
-    if indicator_score(df5) < 0:
-        return None, "WEAK SCORE", None, None, None, None, None, None
+    # Trend
+    score += 2 if df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1] else -2
 
-    model, calib = load_model()
-    f = features(df1, df5, df15).reshape(1,-1)
+    # PA
+    score += candle_dir(df1) + candle_dir(df5) + candle_dir(df15)
 
-    raw = model.predict_proba(f)[0][1]
-    prob = calib.predict_proba([[raw]])[0][1]
-    conf = int(prob*100)
+    # Patterns
+    score += engulfing(df5) * 2 + pin_bar(df5)
 
-    price = df5.iloc[-1]["close"]
-    sl = df5["low"].rolling(20).min().iloc[-1] if pa=="BUY" else df5["high"].rolling(20).max().iloc[-1]
-    tp = price + (price-sl)*2 if pa=="BUY" else price-(sl-price)*2
+    # Levels
+    sup, res = levels(df5)
+    price = df5["close"].iloc[-1]
+    if price < sup * 1.002:
+        score += 1
+    if price > res * 0.998:
+        score -= 1
 
-    r = rr(price,tp,sl)
+    # Kill filter
+    if abs(score) < 3:
+        return None, "NO EDGE"
 
-    if conf>=70 and r>=1.5:
-        return pa,conf,tp,sl,r,"🔥 STRONG","ENTER",price
-    elif conf>=60 and r>=1.3:
-        return pa,conf,tp,sl,r,"⚖️ NORMAL","WAIT",price
-    else:
-        return pa,conf,tp,sl,r,"⚠️ WEAK","SKIP",price
+    direction = "BUY" if score > 0 else "SELL"
+
+    atr = df5["atr"].iloc[-1]
+    sl = price - atr if direction == "BUY" else price + atr
+    tp = price + atr * 1.7 if direction == "BUY" else price - atr * 1.7
+
+    return direction, conf, round(tp,5), round(sl,5)
+
+# ===== JOURNAL =====
+def log_trade(res):
+    with open("trades.log", "a") as f:
+        f.write(f"{datetime.now()} | {res}\n")
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V31 STABLE READY")
+    await update.message.reply_text("🔥 V50 PRO MAX")
 
-async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    res = generate_signal()
+async def sig(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    res = signal()
+
     if res[0] is None:
         await update.message.reply_text(f"❌ {res[1]}")
         return
 
-    d,c,tp,sl,r,s,dec,p = res
+    log_trade(res)
+
+    d, c, tp, sl = res
+
     await update.message.reply_text(
-        f"{d}\n{c}%\nTP {round(tp,5)}\nSL {round(sl,5)}\nRR 1:{r}\n{s}\n{dec}"
+        f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
     )
 
 # ===== AUTO =====
 async def auto(app):
     while True:
         try:
-            res = generate_signal()
-            if res[0] and res[6]=="ENTER":
-                for chat_id in CHAT_IDS:
-                    await app.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"{res[0]} | {res[1]}% | RR {res[4]}"
-                    )
-        except Exception as e:
-            print("ERR:", e)
+            res = signal()
+            if res[0]:
+                log_trade(res)
+                await app.bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=f"{res[0]} | {res[1]}%"
+                )
+        except:
+            pass
 
-        await asyncio.sleep(240)
+        await asyncio.sleep(300)
 
-# ===== MAIN (ANTI-CRASH) =====
-async def run_bot():
-    while True:
-        try:
-            app = ApplicationBuilder().token(TOKEN).build()
+# ===== MAIN =====
+async def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(CommandHandler("signal", signal))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("signal", sig))
 
-            await app.initialize()
-            await app.start()
+    await app.initialize()
+    await app.start()
 
-            asyncio.create_task(auto(app))
+    asyncio.create_task(auto(app))
 
-            print("✅ BOT STARTED")
-
-            await app.updater.start_polling()
-            await asyncio.Event().wait()
-
-        except Exception as e:
-            print("❌ BOT CRASH:", e)
-            await asyncio.sleep(5)
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(run_bot())
+    asyncio.run(main())
