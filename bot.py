@@ -234,7 +234,6 @@ async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print("SIGNAL ERROR:", e)
         await update.message.reply_text("❌ Помилка сигналу")
-    )
 
 # ===== MAIN =====
 async def post_init(app):
