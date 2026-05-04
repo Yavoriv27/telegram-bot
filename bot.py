@@ -75,7 +75,7 @@ def add_indicators(df):
     df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
     return df
 
-# ===== АНТИ-ІМПУЛЬС (НОВЕ) =====
+# ===== АНТИ-ІМПУЛЬС =====
 def strong_impulse_filter(df):
     try:
         last = df.iloc[-1]
@@ -89,6 +89,13 @@ def strong_impulse_filter(df):
         return False, None
     except:
         return False, None
+
+# ===== ТРЕНД-ФІЛЬТР =====
+def get_trend(df):
+    if df["ema20"].iloc[-1] > df["ema50"].iloc[-1]:
+        return "UP"
+    else:
+        return "DOWN"
 
 # ===== MODEL =====
 def train():
@@ -131,14 +138,15 @@ def signal():
     df15 = add_indicators(get_candles("M15"))
 
     if df1.empty or df5.empty or df15.empty:
-        print("NO DATA")
         return None
 
-    # 🔥 анти-ножі
-    impulse, direction_imp = strong_impulse_filter(df5)
+    # 🔥 анти-імпульс
+    impulse, _ = strong_impulse_filter(df5)
     if impulse:
-        print("IMPULSE BLOCKED:", direction_imp)
         return None
+
+    # 🔥 тренд
+    trend = get_trend(df15)
 
     model, scaler = load_model()
 
@@ -162,6 +170,12 @@ def signal():
 
     direction = "BUY" if score > 0 else "SELL"
 
+    # 🔥 не проти тренду
+    if direction == "BUY" and trend == "DOWN":
+        return None
+    if direction == "SELL" and trend == "UP":
+        return None
+
     price = df5["close"].iloc[-1]
     atr = df5["atr"].iloc[-1]
 
@@ -172,9 +186,7 @@ def signal():
 
 # ===== FILTER =====
 def is_strong_signal(res):
-    if not res:
-        return False
-    return res[1] >= 60
+    return res and res[1] >= 60
 
 # ===== AUTO =====
 async def auto_signals(app):
@@ -203,10 +215,7 @@ async def auto_signals(app):
                 msg = f"🔥 СИЛЬНИЙ СИГНАЛ\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
 
                 for user in users:
-                    try:
-                        await app.bot.send_message(chat_id=user, text=msg)
-                    except Exception as e:
-                        print("SEND ERROR:", e)
+                    await app.bot.send_message(chat_id=user, text=msg)
 
         except Exception as e:
             print("AUTO ERROR:", e)
@@ -219,28 +228,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Бот активний. Чекай сигнал 🔥")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        df5 = get_candles("M5")
+    df5 = get_candles("M5")
 
-        if df5 is None or df5.empty:
-            await update.message.reply_text("❌ Немає даних")
-            return
+    if df5 is None or df5.empty:
+        await update.message.reply_text("❌ Немає даних")
+        return
 
-        price = df5["close"].iloc[-1]
-        res = signal()
+    price = df5["close"].iloc[-1]
+    res = signal()
 
-        if not res:
-            await update.message.reply_text(f"📊 Ціна: {round(price,5)}\n❌ Немає сигналу")
-            return
+    if not res:
+        await update.message.reply_text(f"📊 Ціна: {round(price,5)}\n❌ Немає сигналу")
+        return
 
-        d, c, tp, sl = res
+    d, c, tp, sl = res
 
-        await update.message.reply_text(
-            f"📊 Ціна: {round(price,5)}\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
-        )
-
-    except Exception as e:
-        print("SIGNAL ERROR:", e)
+    await update.message.reply_text(
+        f"📊 Ціна: {round(price,5)}\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+    )
 
 # ===== MAIN =====
 async def post_init(app):
