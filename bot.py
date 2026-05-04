@@ -25,6 +25,10 @@ PAIR = "EUR_USD"
 MODEL_FILE = "model.pkl"
 
 client = oandapyV20.API(access_token=OANDA_TOKEN)
+client = oandapyV20.API(
+    access_token=OANDA_TOKEN,
+    environment="practice"
+)
 
 # ===== USERS =====
 users = set()
@@ -58,6 +62,9 @@ def get_candles(tf, count=200):
 
 # ===== INDICATORS =====
 def add_indicators(df):
+    if df is None or df.empty or "close" not in df:
+        return pd.DataFrame()
+
     df["ema20"] = df["close"].ewm(span=20).mean()
     df["ema50"] = df["close"].ewm(span=50).mean()
 
