@@ -1,10 +1,7 @@
-print("🔥 FILE STARTED")
-
 import os
 import asyncio
 import pandas as pd
 import numpy as np
-import joblib
 from datetime import datetime
 
 from telegram import Update
@@ -13,72 +10,48 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
-
 # ===== CONFIG =====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
 
 PAIR = "EUR_USD"
-MODEL_FILE = "model.pkl"
 
-client = oandapyV20.API(
-    access_token=OANDA_TOKEN,
-    environment="practice"
-)
+# 👉 ДОДАЙ СЮДИ CHAT ID
+USERS = [
+    123456789,  # ти
+    987654321   # брат
+]
 
-# ===== USERS =====
-users = set()
+client = oandapyV20.API(access_token=OANDA_TOKEN, environment="practice")
 
-# ===== STATE =====
-last_signal_sent = None
-last_signal_time = None
+last_signal = None
+last_time = None
 
 # ===== DATA =====
 def get_candles(tf, count=200):
-    for attempt in range(3):
-        try:
-            r = instruments.InstrumentsCandles(
-                instrument=PAIR,
-                params={"granularity": tf, "count": count, "price": "M"}
-            )
-            client.request(r)
+    try:
+        r = instruments.InstrumentsCandles(
+            instrument=PAIR,
+            params={"granularity": tf, "count": count, "price": "M"}
+        )
+        client.request(r)
 
-            if not isinstance(r.response, dict):
-                continue
+        data = []
+        for c in r.response["candles"]:
+            if c["complete"]:
+                data.append({
+                    "open": float(c["mid"]["o"]),
+                    "high": float(c["mid"]["h"]),
+                    "low": float(c["mid"]["l"]),
+                    "close": float(c["mid"]["c"]),
+                })
 
-            if "candles" not in r.response:
-                continue
-
-            data = []
-            for c in r.response["candles"]:
-                if c["complete"]:
-                    data.append({
-                        "open": float(c["mid"]["o"]),
-                        "high": float(c["mid"]["h"]),
-                        "low": float(c["mid"]["l"]),
-                        "close": float(c["mid"]["c"]),
-                    })
-
-            if len(data) == 0:
-                continue
-
-            return pd.DataFrame(data)
-
-        except Exception as e:
-            print("DATA ERROR:", e)
-
-        import time
-        time.sleep(2)
-
-    return pd.DataFrame()
+        return pd.DataFrame(data)
+    except:
+        return pd.DataFrame()
 
 # ===== INDICATORS =====
 def add_indicators(df):
-    if df is None or df.empty or "close" not in df:
-        return pd.DataFrame()
-
     df["ema20"] = df["close"].ewm(span=20).mean()
     df["ema50"] = df["close"].ewm(span=50).mean()
 
@@ -89,86 +62,59 @@ def add_indicators(df):
     df["rsi"] = 100 - (100 / (1 + rs))
 
     df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
+
+    df["adx"] = abs(df["ema20"] - df["ema50"]) / df["atr"]
+
     return df
 
-# ===== АНТИ-ІМПУЛЬС =====
-def strong_impulse_filter(df):
-    try:
-        last = df.iloc[-1]
-        body = abs(last["close"] - last["open"])
-        atr = df["atr"].iloc[-1]
+# ===== PRICE ACTION =====
+def price_action(df):
+    last3 = df.tail(3)
 
-        if body > atr * 2:
-            return True
-        return False
-    except:
-        return False
+    bull = all(last3["close"] > last3["open"])
+    bear = all(last3["close"] < last3["open"])
 
-# ===== ТРЕНД =====
+    body = abs(df["close"].iloc[-1] - df["open"].iloc[-1])
+    atr = df["atr"].iloc[-1]
+
+    strong = body > atr * 0.8
+
+    if bull and strong:
+        return "BUY"
+    if bear and strong:
+        return "SELL"
+
+    return None
+
+# ===== LEVELS =====
+def get_levels(df):
+    recent = df.tail(30)
+    return recent["low"].min(), recent["high"].max()
+
+# ===== TREND =====
 def get_trend(df):
     return "UP" if df["ema20"].iloc[-1] > df["ema50"].iloc[-1] else "DOWN"
 
-# ===== РІВНІ =====
-def get_levels(df):
-    try:
-        recent = df.tail(30)
-        resistance = recent["high"].max()
-        support = recent["low"].min()
-        return support, resistance
-    except:
-        return None, None
+# ===== FILTER =====
+def market_filter(df):
+    return df["adx"].iloc[-1] > 0.3
 
-def level_filter(direction, price, support, resistance, atr):
-    if support is None or resistance is None:
-        return True
+# ===== AI FILTER (простий) =====
+def ai_filter(score, rsi, trend):
+    # імітація "розуму"
+    if abs(score) < 4:
+        return False
 
-    buffer = atr * 0.3
+    if trend == "UP" and rsi > 75:
+        return False
 
-    if direction == "BUY":
-        if price > support + buffer:
-            return False
-
-    if direction == "SELL":
-        if price < resistance - buffer:
-            return False
+    if trend == "DOWN" and rsi < 25:
+        return False
 
     return True
 
-# ===== MODEL =====
-def train():
-    df1 = add_indicators(get_candles("M1", 800))
-    df5 = add_indicators(get_candles("M5", 800))
-    df15 = add_indicators(get_candles("M15", 800))
-
-    X, y = [], []
-
-    for i in range(50, len(df5)-3):
-        X.append([
-            df1["close"].iloc[i] - df1["close"].iloc[i-3],
-            df5["close"].iloc[i] - df5["close"].iloc[i-3],
-            df15["close"].iloc[i] - df15["close"].iloc[i-3],
-            df5["ema20"].iloc[i] - df5["ema50"].iloc[i],
-            df5["rsi"].iloc[i],
-            df5["atr"].iloc[i]
-        ])
-
-        y.append(1 if df5["close"].iloc[i+2] > df5["close"].iloc[i] else 0)
-
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-
-    model = RandomForestClassifier(n_estimators=200)
-    model.fit(X, y)
-
-    joblib.dump((model, scaler), MODEL_FILE)
-
-def load_model():
-    if not os.path.exists(MODEL_FILE):
-        train()
-    return joblib.load(MODEL_FILE)
-
 # ===== SIGNAL =====
-def signal():
+def generate_signal():
     df1 = add_indicators(get_candles("M1"))
     df5 = add_indicators(get_candles("M5"))
     df15 = add_indicators(get_candles("M15"))
@@ -176,118 +122,122 @@ def signal():
     if df1.empty or df5.empty or df15.empty:
         return None
 
-    if strong_impulse_filter(df5):
+    if not market_filter(df5):
         return None
 
     trend = get_trend(df15)
+    pa = price_action(df5)
 
-    model, scaler = load_model()
-
-    feat = np.array([
-        df1["close"].iloc[-1] - df1["close"].iloc[-3],
-        df5["close"].iloc[-1] - df5["close"].iloc[-3],
-        df15["close"].iloc[-1] - df15["close"].iloc[-3],
-        df5["ema20"].iloc[-1] - df5["ema50"].iloc[-1],
-        df5["rsi"].iloc[-1],
-        df5["atr"].iloc[-1]
-    ]).reshape(1, -1)
-
-    feat = scaler.transform(feat)
-    prob = model.predict_proba(feat)[0][1]
-    conf = int(prob * 100)
-
-    score = (prob - 0.5) * 6
-
-    if abs(score) < 1.5:
-        return None
-
-    direction = "BUY" if score > 0 else "SELL"
-
-    if direction == "BUY" and trend == "DOWN" and conf < 80:
-        return None
-    if direction == "SELL" and trend == "UP" and conf < 80:
-        return None
+    support, resistance = get_levels(df5)
 
     price = df5["close"].iloc[-1]
     atr = df5["atr"].iloc[-1]
 
-    # 🔥 РІВНІ
-    support, resistance = get_levels(df5)
+    score = 0
 
-    if not level_filter(direction, price, support, resistance, atr):
+    # EMA
+    score += 2 if df5["ema20"].iloc[-1] > df5["ema50"].iloc[-1] else -2
+
+    # RSI
+    if df5["rsi"].iloc[-1] < 30:
+        score += 1
+    if df5["rsi"].iloc[-1] > 70:
+        score -= 1
+
+    # TREND
+    score += 2 if trend == "UP" else -2
+
+    # PA
+    if pa == "BUY":
+        score += 2
+    if pa == "SELL":
+        score -= 2
+
+    # AI FILTER
+    if not ai_filter(score, df5["rsi"].iloc[-1], trend):
         return None
 
-    tp = price + atr*1.8 if direction == "BUY" else price - atr*1.8
+    if score >= 4:
+        direction = "BUY"
+    elif score <= -4:
+        direction = "SELL"
+    else:
+        return None
+
+    # LEVEL CHECK
+    if direction == "BUY" and price > support + atr:
+        return None
+    if direction == "SELL" and price < resistance - atr:
+        return None
+
+    confidence = min(90, abs(score) * 10)
+
+    tp = price + atr * 1.5 if direction == "BUY" else price - atr * 1.5
     sl = price - atr if direction == "BUY" else price + atr
 
-    return direction, conf, round(tp,5), round(sl,5)
-
-# ===== FILTER =====
-def is_strong_signal(res):
-    return res and res[1] >= 55
+    return direction, confidence, round(price,5), round(tp,5), round(sl,5)
 
 # ===== AUTO =====
-async def auto_signals(app):
-    global last_signal_sent, last_signal_time
+async def auto(app):
+    global last_signal, last_time
 
     while True:
         try:
-            res = signal()
+            res = generate_signal()
 
-            if is_strong_signal(res):
+            if res:
                 now = datetime.utcnow()
 
-                if last_signal_time and (now - last_signal_time).seconds < 180:
+                if last_time and (now - last_time).seconds < 120:
                     await asyncio.sleep(20)
                     continue
 
-                if res == last_signal_sent:
+                if res == last_signal:
                     await asyncio.sleep(20)
                     continue
 
-                last_signal_sent = res
-                last_signal_time = now
+                last_signal = res
+                last_time = now
 
-                d, c, tp, sl = res
+                d, c, price, tp, sl = res
 
-                msg = f"🔥 СИГНАЛ\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+                msg = f"""🔥 СИГНАЛ
 
-                for user in users:
-                    await app.bot.send_message(chat_id=user, text=msg)
+{d}
+📊 {price}
+📈 CONF: {c}%
+🎯 TP: {tp}
+🛑 SL: {sl}
+⏱ 2 хв"""
+
+                for u in USERS:
+                    await app.bot.send_message(chat_id=u, text=msg)
 
         except Exception as e:
-            print("AUTO ERROR:", e)
+            print("ERROR:", e)
 
-        await asyncio.sleep(90)
+        await asyncio.sleep(60)
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users.add(update.effective_chat.id)
-    await update.message.reply_text("✅ Бот активний")
+    await update.message.reply_text("✅ Бот працює")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    df5 = get_candles("M5")
-
-    if df5 is None or df5.empty:
-        await update.message.reply_text("❌ Немає даних")
-        return
-
-    price = df5["close"].iloc[-1]
-    res = signal()
+    res = generate_signal()
 
     if not res:
-        await update.message.reply_text(f"📊 {round(price,5)}\n❌ Немає сигналу")
+        await update.message.reply_text("❌ Немає сигналу")
         return
 
-    d, c, tp, sl = res
+    d, c, price, tp, sl = res
 
     await update.message.reply_text(
-        f"📊 {round(price,5)}\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+        f"{d}\n📊 {price}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
     )
 
 # ===== MAIN =====
 async def post_init(app):
-    asyncio.create_task(auto_signals(app))
+    asyncio.create_task(auto(app))
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
@@ -295,7 +245,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("signal", signal_cmd))
 
-    print("🚀 BOT STARTED")
+    print("🚀 V14 BOT STARTED")
 
     app.run_polling()
 
