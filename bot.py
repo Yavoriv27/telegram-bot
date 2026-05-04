@@ -87,7 +87,7 @@ def strong_impulse_filter(df):
         body = abs(last["close"] - last["open"])
         atr = df["atr"].iloc[-1]
 
-        if body > atr * 1.5:
+        if body > atr * 2:
             direction = "UP" if last["close"] > last["open"] else "DOWN"
             return True, direction
 
@@ -170,15 +170,16 @@ def signal():
 
     score = (prob - 0.5) * 6
 
-    if abs(score) < 2:
+    if abs(score) < 1.5:
         return None
 
     direction = "BUY" if score > 0 else "SELL"
 
     # 🔥 не проти тренду
-    if direction == "BUY" and trend == "DOWN":
+    if direction == "BUY" and trend == "DOWN" and conf < 80:
         return None
-    if direction == "SELL" and trend == "UP":
+
+    if direction == "SELL" and trend == "UP" and conf < 80:
         return None
 
     price = df5["close"].iloc[-1]
@@ -191,7 +192,7 @@ def signal():
 
 # ===== FILTER =====
 def is_strong_signal(res):
-    return res and res[1] >= 60
+    return res and res[1] >= 55
 
 # ===== AUTO =====
 async def auto_signals(app):
