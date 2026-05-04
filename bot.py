@@ -130,7 +130,7 @@ def signal():
 
     score = (prob - 0.5) * 6
 
-    if abs(score) < 3:
+    if abs(score) < 2:
         return None
 
     direction = "BUY" if score > 0 else "SELL"
@@ -151,7 +151,7 @@ def is_strong_signal(res):
     direction, conf, tp, sl = res
 
     # 🔥 тільки сильні сигнали
-    return conf >= 65
+    return conf >= 60
 
 # ===== AUTO SIGNALS =====
 async def auto_signals(app):
