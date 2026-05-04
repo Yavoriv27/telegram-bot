@@ -24,7 +24,6 @@ OANDA_TOKEN = os.getenv("OANDA_API_KEY")
 PAIR = "EUR_USD"
 MODEL_FILE = "model.pkl"
 
-client = oandapyV20.API(access_token=OANDA_TOKEN)
 client = oandapyV20.API(
     access_token=OANDA_TOKEN,
     environment="practice"
@@ -117,7 +116,8 @@ def signal():
     df5 = add_indicators(get_candles("M5"))
     df15 = add_indicators(get_candles("M15"))
 
-    if df5.empty:
+    if df1.empty or df5.empty or df15.empty:
+        print("NO DATA FROM OANDA")
         return None
 
     model, scaler = load_model()
@@ -207,16 +207,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Ти підключений. Чекай сильні сигнали 🔥")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    res = signal()
+    try:
+        df5 = get_candles("M5")
 
-    if not res:
-        await update.message.reply_text("❌ Немає сигналу")
-        return
+        if df5 is None or df5.empty:
+            await update.message.reply_text("❌ Немає даних з OANDA")
+            return
 
-    d, c, tp, sl = res
+        last_price = df5["close"].iloc[-1]
 
-    await update.message.reply_text(
-        f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+        res = signal()
+
+        if not res:
+            await update.message.reply_text(
+                f"📊 Дані отримано\nЦіна: {round(last_price,5)}\n❌ Немає сигналу"
+            )
+            return
+
+        d, c, tp, sl = res
+
+        await update.message.reply_text(
+            f"📊 Дані отримано\nЦіна: {round(last_price,5)}\n\n"
+            f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+        )
+
+    except Exception as e:
+        print("SIGNAL ERROR:", e)
+        await update.message.reply_text("❌ Помилка сигналу")
     )
 
 # ===== MAIN =====
