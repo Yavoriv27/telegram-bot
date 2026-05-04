@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import joblib
 from datetime import datetime
-from collections import deque
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -76,6 +75,21 @@ def add_indicators(df):
     df["atr"] = (df["high"] - df["low"]).rolling(14).mean()
     return df
 
+# ===== АНТИ-ІМПУЛЬС (НОВЕ) =====
+def strong_impulse_filter(df):
+    try:
+        last = df.iloc[-1]
+        body = abs(last["close"] - last["open"])
+        atr = df["atr"].iloc[-1]
+
+        if body > atr * 1.5:
+            direction = "UP" if last["close"] > last["open"] else "DOWN"
+            return True, direction
+
+        return False, None
+    except:
+        return False, None
+
 # ===== MODEL =====
 def train():
     df1 = add_indicators(get_candles("M1", 800))
@@ -110,14 +124,20 @@ def load_model():
         train()
     return joblib.load(MODEL_FILE)
 
-# ===== SIGNAL (твоя логіка збережена) =====
+# ===== SIGNAL =====
 def signal():
     df1 = add_indicators(get_candles("M1"))
     df5 = add_indicators(get_candles("M5"))
     df15 = add_indicators(get_candles("M15"))
 
     if df1.empty or df5.empty or df15.empty:
-        print("NO DATA FROM OANDA")
+        print("NO DATA")
+        return None
+
+    # 🔥 анти-ножі
+    impulse, direction_imp = strong_impulse_filter(df5)
+    if impulse:
+        print("IMPULSE BLOCKED:", direction_imp)
         return None
 
     model, scaler = load_model()
@@ -150,17 +170,13 @@ def signal():
 
     return direction, conf, round(tp,5), round(sl,5)
 
-# ===== STRONG FILTER =====
+# ===== FILTER =====
 def is_strong_signal(res):
     if not res:
         return False
+    return res[1] >= 60
 
-    direction, conf, tp, sl = res
-
-    # 🔥 тільки сильні сигнали
-    return conf >= 60
-
-# ===== AUTO SIGNALS =====
+# ===== AUTO =====
 async def auto_signals(app):
     global last_signal_sent, last_signal_time
 
@@ -171,14 +187,12 @@ async def auto_signals(app):
             if is_strong_signal(res):
                 now = datetime.utcnow()
 
-                # ❗ анти-спам (1 сигнал раз в 5 хв)
-                if last_signal_time and (now - last_signal_time).seconds < 300:
-                    await asyncio.sleep(30)
+                if last_signal_time and (now - last_signal_time).seconds < 180:
+                    await asyncio.sleep(20)
                     continue
 
-                # ❗ не повторювати той самий сигнал
                 if res == last_signal_sent:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(20)
                     continue
 
                 last_signal_sent = res
@@ -201,39 +215,32 @@ async def auto_signals(app):
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    users.add(user_id)
-
-    await update.message.reply_text("✅ Ти підключений. Чекай сильні сигнали 🔥")
+    users.add(update.effective_chat.id)
+    await update.message.reply_text("✅ Бот активний. Чекай сигнал 🔥")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         df5 = get_candles("M5")
 
         if df5 is None or df5.empty:
-            await update.message.reply_text("❌ Немає даних з OANDA")
+            await update.message.reply_text("❌ Немає даних")
             return
 
-        last_price = df5["close"].iloc[-1]
-
+        price = df5["close"].iloc[-1]
         res = signal()
 
         if not res:
-            await update.message.reply_text(
-                f"📊 Дані отримано\nЦіна: {round(last_price,5)}\n❌ Немає сигналу"
-            )
+            await update.message.reply_text(f"📊 Ціна: {round(price,5)}\n❌ Немає сигналу")
             return
 
         d, c, tp, sl = res
 
         await update.message.reply_text(
-            f"📊 Дані отримано\nЦіна: {round(last_price,5)}\n\n"
-            f"{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+            f"📊 Ціна: {round(price,5)}\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
         )
 
     except Exception as e:
         print("SIGNAL ERROR:", e)
-        await update.message.reply_text("❌ Помилка сигналу")
 
 # ===== MAIN =====
 async def post_init(app):
