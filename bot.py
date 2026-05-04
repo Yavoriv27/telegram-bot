@@ -44,6 +44,10 @@ def get_candles(tf, count=200):
         )
         client.request(r)
 
+        if "candles" not in r.response:
+            print("BAD RESPONSE FROM OANDA")
+            return pd.DataFrame()
+
         data = []
         for c in r.response["candles"]:
             if c["complete"]:
@@ -53,11 +57,12 @@ def get_candles(tf, count=200):
                     "low": float(c["mid"]["l"]),
                     "close": float(c["mid"]["c"]),
                 })
+
         return pd.DataFrame(data)
+
     except Exception as e:
         print("DATA ERROR:", e)
         return pd.DataFrame()
-
 # ===== INDICATORS =====
 def add_indicators(df):
     if df is None or df.empty or "close" not in df:
