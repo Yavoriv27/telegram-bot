@@ -108,11 +108,15 @@ def zone_filter(direction, price, sz, rz):
     s_low, s_high = sz
     r_low, r_high = rz
 
+    buffer = (r_high - s_low) * 0.15
+
     if direction == "BUY":
-        return s_low <= price <= s_high
+        return price <= s_high + buffer
+
     if direction == "SELL":
-        return r_low <= price <= r_high
-    return False
+        return price >= r_low - buffer
+
+    return True
 
 # ===== FAKE BREAKOUT =====
 def fake_breakout(df):
