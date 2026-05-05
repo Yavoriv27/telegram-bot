@@ -101,7 +101,7 @@ def get_zones(df):
     recent = df.tail(40)
     high = recent["high"].max()
     low = recent["low"].min()
-    zone = (high - low) * 0.2
+    zone = (high - low) * 0.4
     return (low, low + zone), (high - zone, high)
 
 def zone_filter(direction, price, sz, rz):
@@ -157,8 +157,8 @@ def load_model():
 
 # ===== SIGNAL =====
 def signal():
-    if not session_filter():
-        return None
+    # if not session_filter():
+#     return None
 
     df = add_indicators(get_candles("M5"))
     if df.empty:
@@ -182,7 +182,7 @@ def signal():
     conf = int(prob * 100)
 
     score = (prob - 0.5) * 6
-    if abs(score) < 1.5:
+    if abs(score) < 1.2:
         return None
 
     direction = "BUY" if score > 0 else "SELL"
@@ -191,9 +191,9 @@ def signal():
     atr = df["atr"].iloc[-1]
 
     # TREND FILTER
-    if direction == "BUY" and trend == "DOWN" and conf < 80:
+    if direction == "BUY" and trend == "DOWN" and conf < 70:
         return None
-    if direction == "SELL" and trend == "UP" and conf < 80:
+    if direction == "SELL" and trend == "UP" and conf < 70:
         return None
 
     # ZONES
@@ -213,7 +213,7 @@ def signal():
 
 # ===== FILTER =====
 def is_strong(res):
-    return res and res[1] >= 55
+    return res and res[1] >= 50
 
 # ===== AUTO =====
 async def auto(app):
