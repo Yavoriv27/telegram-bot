@@ -229,7 +229,16 @@ async def auto(app):
 
     while True:
         try:
-            res = signal()
+            best = None
+
+            for pair in PAIRS:
+                res = signal(pair)
+
+                if res:
+                    if not best or res[1] > best[1]:
+                        best = (*res, pair)
+
+res = best
 
             if is_strong(res):
                 now = datetime.utcnow()
@@ -245,8 +254,8 @@ async def auto(app):
                 last_signal_sent = res
                 last_signal_time = now
 
-                d, c, tp, sl = res
-                msg = f"🔥 SIGNAL\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
+                d, c, tp, sl, pair = res
+                msg = f"🔥 SIGNAL {pair}\n\n{d}\nCONF: {c}%\nTP: {tp}\nSL: {sl}"
 
                 for u in users:
                     await app.bot.send_message(chat_id=u, text=msg)
@@ -268,7 +277,7 @@ async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     price = df["close"].iloc[-1]
-    res = signal()
+    res = signal(PAIRS[0])
 
     if not res:
         await update.message.reply_text(f"📊 {round(price,5)}\n❌ No signal")
