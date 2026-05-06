@@ -39,7 +39,7 @@ def get_candles(pair, tf, count=200):
     for _ in range(3):
         try:
             r = instruments.InstrumentsCandles(
-                instrument=pair
+                instrument=pair,
                 params={"granularity": tf, "count": count, "price": "M"}
             )
             client.request(r)
@@ -164,11 +164,11 @@ def load_model():
     return joblib.load(MODEL_FILE)
 
 # ===== SIGNAL =====
-def signal():
+def signal(pair):
     # if not session_filter():
 #     return None
 
-    df = add_indicators(get_candles("M5"))
+    df = add_indicators(get_candles(pair,"M5"))
     if df.empty:
         return None
 
