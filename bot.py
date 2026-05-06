@@ -169,8 +169,9 @@ def signal(pair):
 #     return None
 
     df = add_indicators(get_candles(pair,"M5"))
+    
     if df.empty or len(df) < 60:
-    return None
+        return None
 
     if strong_impulse_filter(df):
         return None
