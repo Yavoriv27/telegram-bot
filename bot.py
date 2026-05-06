@@ -238,7 +238,7 @@ async def auto(app):
                     if not best or res[1] > best[1]:
                         best = (*res, pair)
 
-res = best
+            res = best
 
             if is_strong(res):
                 now = datetime.utcnow()
