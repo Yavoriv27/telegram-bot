@@ -137,7 +137,7 @@ def fake_breakout(df):
 
 # ===== MODEL =====
 def train():
-    df = add_indicators(get_candles("M5", 800))
+    df = add_indicators(get_candles(PAIRS[0], "M5", 800))
 
     X, y = [], []
 
@@ -169,8 +169,8 @@ def signal(pair):
 #     return None
 
     df = add_indicators(get_candles(pair,"M5"))
-    if df.empty:
-        return None
+    if df.empty or len(df) < 60:
+    return None
 
     if strong_impulse_filter(df):
         return None
@@ -271,7 +271,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ BOT WORKING")
 
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    df = get_candles("M5")
+    df = get_candles(PAIRS[0], "M5")
     if df.empty:
         await update.message.reply_text("❌ No data")
         return
