@@ -35,11 +35,11 @@ last_signal_sent = None
 last_signal_time = None
 
 # ===== DATA =====
-def get_candles(tf, count=200):
+def get_candles(pair, tf, count=200):
     for _ in range(3):
         try:
             r = instruments.InstrumentsCandles(
-                instrument=PAIR,
+                instrument=pair
                 params={"granularity": tf, "count": count, "price": "M"}
             )
             client.request(r)
