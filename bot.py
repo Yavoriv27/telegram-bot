@@ -21,7 +21,11 @@ from sklearn.preprocessing import StandardScaler
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OANDA_TOKEN = os.getenv("OANDA_API_KEY")
 
-PAIR = "EUR_USD"
+PAIRS = [
+    "EUR_USD",
+    "GBP_USD",
+    "USD_JPY"
+]
 MODEL_FILE = "model.pkl"
 
 client = oandapyV20.API(access_token=OANDA_TOKEN, environment="practice")
