@@ -199,7 +199,7 @@ def signal(pair):
 
     direction = "BUY" if score > 0 else "SELL"
 
-        price = df["close"].iloc[-1]
+    price = df["close"].iloc[-1]
     atr = df["atr"].iloc[-1]
 
     # 🔥 НЕ ВХОДИТИ В КІНЦІ ІМПУЛЬСУ
