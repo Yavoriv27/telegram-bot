@@ -36,13 +36,16 @@ last_signal_time = None
 
 # ===== DATA =====
 def get_candles(pair, tf, count=200):
-    for _ in range(3):
+    for _ in range(2):
         try:
             r = instruments.InstrumentsCandles(
                 instrument=pair,
                 params={"granularity": tf, "count": count, "price": "M"}
             )
             client.request(r)
+            
+            if not isinstance(r.response, dict):
+                return pd.DataFrame()
 
             if "candles" not in r.response:
                 continue
@@ -61,7 +64,7 @@ def get_candles(pair, tf, count=200):
                 return pd.DataFrame(data)
 
         except Exception as e:
-            print("DATA ERROR:", e)
+            pass
 
         time.sleep(2)
 
@@ -264,7 +267,7 @@ async def auto(app):
         except Exception as e:
             print("AUTO ERROR:", e)
 
-        await asyncio.sleep(90)
+        await asyncio.sleep(130)
 
 # ===== TELEGRAM =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
