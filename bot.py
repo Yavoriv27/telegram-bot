@@ -202,6 +202,16 @@ def signal(pair):
     price = df["close"].iloc[-1]
     atr = df["atr"].iloc[-1]
 
+    # 🔥 НЕ ВХОДИТИ В КІНЦІ ІМПУЛЬСУ
+
+last = df.iloc[-1]
+
+body = abs(last["close"] - last["open"])
+
+# якщо свічка вже занадто велика
+if body > atr * 0.7:
+    return None
+
     # TREND FILTER
     if direction == "BUY" and trend == "DOWN" and conf < 70:
         return None
