@@ -312,7 +312,7 @@ def main():
     app.add_handler(CommandHandler("signal", signal_cmd))
 
     print("🚀 BOT STARTED")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
