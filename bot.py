@@ -194,7 +194,7 @@ def signal(pair):
     conf = int(prob * 100)
 
     score = (prob - 0.5) * 6
-    if abs(score) < 1.6:
+    if abs(score) < 1.8:
         return None
 
     direction = "BUY" if score > 0 else "SELL"
@@ -207,7 +207,7 @@ def signal(pair):
 
     body = abs(last["close"] - last["open"])
 
-    if body > atr * 0.7:
+    if body > atr * 0.60:
         return None
 
     # TREND FILTER
@@ -233,7 +233,7 @@ def signal(pair):
 
 # ===== FILTER =====
 def is_strong(res):
-    return res and res[1] >= 60
+    return res and res[1] >= 65
 
 # ===== AUTO =====
 async def auto(app):
