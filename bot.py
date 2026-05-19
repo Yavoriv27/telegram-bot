@@ -986,7 +986,7 @@ async def button(update: Update, context):
 
             current_price = "N/A"
 
-    try:
+            try:
 
         price_df = get_data("M1", 1)
 
@@ -1000,7 +1000,7 @@ async def button(update: Update, context):
                 5
             )
 
-    except Exception as e:
+            except Exception as e:
 
         print("PRICE ERROR:", e)
 
