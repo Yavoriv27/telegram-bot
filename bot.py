@@ -982,20 +982,27 @@ async def button(update: Update, context):
 
     if q.data == "signal":
 
-        signal = generate_signal()
+    signal = generate_signal()
+
+    current_price = "N/A"
+
+    try:
 
         price_df = get_data("M1", 1)
 
-        if not price_df.empty and "close" in price_df.columns:
+        if (
+            not price_df.empty
+            and "close" in price_df.columns
+        ):
 
             current_price = round(
                 price_df["close"].iloc[-1],
                 5
             )
 
-    else:
+    except Exception as e:
 
-        current_price = "N/A"
+        print("PRICE ERROR:", e)
 
     if not signal:
 
