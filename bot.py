@@ -897,7 +897,7 @@ def generate_signal():
     print("FINAL SCORE:", score)
     print("CONFIDENCE:", confidence)
 
-    if confidence < 80:
+    if confidence < 72:
         return None
 
     return {
