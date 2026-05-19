@@ -795,12 +795,13 @@ def generate_signal():
     macd = df5["macd"].iloc[-1]
     macd_signal = df5["macd_signal"].iloc[-1]
     volatility = df5["volatility"].iloc[-1]
+
     print("========== MARKET DEBUG ==========")
     print("TREND15:", trend15)
     print("TREND5:", trend5)
-    print("ADX:", round(adx,2))
-    print("RSI:", round(rsi,2))
-    print("MACD:", round(macd,5))
+    print("ADX:", round(adx, 2))
+    print("RSI:", round(rsi, 2))
+    print("MACD:", round(macd, 5))
     print("STRUCTURE:", structure)
     print("BOS:", bos_signal)
     print("CHOCH:", choch_signal)
@@ -886,7 +887,6 @@ def generate_signal():
 
     if direction == "BUY":
         score += int(prob * 8)
-
     else:
         score += int((1 - prob) * 8)
 
@@ -982,40 +982,40 @@ async def button(update: Update, context):
 
     if q.data == "signal":
 
-            signal = generate_signal()
+        signal = generate_signal()
 
-            current_price = "N/A"
+        current_price = "N/A"
 
-            try:
+        try:
 
-        price_df = get_data("M1", 1)
+            price_df = get_data("M1", 1)
 
-        if (
-            not price_df.empty
-            and "close" in price_df.columns
-        ):
+            if (
+                not price_df.empty
+                and "close" in price_df.columns
+            ):
 
-            current_price = round(
-                price_df["close"].iloc[-1],
-                5
+                current_price = round(
+                    price_df["close"].iloc[-1],
+                    5
+                )
+
+        except Exception as e:
+
+            print("PRICE ERROR:", e)
+
+        if not signal:
+
+            await q.message.reply_text(
+                f"❌ No signal\n\n"
+                f"💰 Price: {current_price}\n\n"
+                f"Reason:\n"
+                f"• weak trend\n"
+                f"• low confidence\n"
+                f"• flat market"
             )
 
-            except Exception as e:
-
-        print("PRICE ERROR:", e)
-
-    if not signal:
-
-        await q.message.reply_text(
-            f"❌ No signal\n\n"
-            f"💰 Price: {current_price}\n\n"
-            f"Reason:\n"
-            f"• weak trend\n"
-            f"• low confidence\n"
-            f"• flat market"
-        )
-
-        return
+            return
 
         LAST_SIGNAL = signal
 
