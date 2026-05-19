@@ -1,7 +1,7 @@
 python-telegram-bot==20.7
 pandas
 numpy
-scikit-learn
-joblib
-oandapyV20
 requests
+scikit-learn
+xgboost
+joblib
