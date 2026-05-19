@@ -972,7 +972,12 @@ async def button(update: Update, context):
         if not signal:
 
             await q.message.reply_text(
-                "❌ Strong signal not found",
+                "❌ No signal
+                    Reason:
+                    weak trend
+                    low confidence
+                    news filter
+                    flat market",
                 reply_markup=keyboard()
             )
 
