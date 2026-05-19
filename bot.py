@@ -980,7 +980,7 @@ async def button(update: Update, context):
 
     await q.answer()
 
-    if q.data == "signal":
+         if q.data == "signal":
 
     signal = generate_signal()
 
