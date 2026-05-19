@@ -984,7 +984,7 @@ async def button(update: Update, context):
 
             signal = generate_signal()
 
-    current_price = "N/A"
+            current_price = "N/A"
 
     try:
 
