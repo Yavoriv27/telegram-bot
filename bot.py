@@ -795,6 +795,18 @@ def generate_signal():
     macd = df5["macd"].iloc[-1]
     macd_signal = df5["macd_signal"].iloc[-1]
     volatility = df5["volatility"].iloc[-1]
+    print("========== MARKET DEBUG ==========")
+    print("TREND15:", trend15)
+    print("TREND5:", trend5)
+    print("ADX:", round(adx,2))
+    print("RSI:", round(rsi,2))
+    print("MACD:", round(macd,5))
+    print("STRUCTURE:", structure)
+    print("BOS:", bos_signal)
+    print("CHOCH:", choch_signal)
+    print("SWEEP:", sweep)
+    print("FLOW:", flow)
+    print("==================================")
 
     score = 0
 
