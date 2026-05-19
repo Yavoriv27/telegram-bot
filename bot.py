@@ -873,10 +873,10 @@ def generate_signal():
     prob = model.predict_proba(feat)[0][1]
 
     if direction == "BUY":
-        score += int(prob * 15)
+        score += int(prob * 8)
 
     else:
-        score += int((1 - prob) * 20)
+        score += int((1 - prob) * 8)
 
     score += adaptive_bonus()
 
