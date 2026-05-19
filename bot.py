@@ -982,12 +982,20 @@ async def button(update: Update, context):
 
     if q.data == "signal":
 
-        signal = generate_signal()
+    signal = generate_signal()
+
+    price_df = get_data("M1", 1)
+
+    if not price_df.empty and "close" in price_df.columns:
 
         current_price = round(
-            get_data("M1", 1)["close"].iloc[-1],
+            price_df["close"].iloc[-1],
             5
-    )
+        )
+
+    else:
+
+        current_price = "N/A"
 
     if not signal:
 
