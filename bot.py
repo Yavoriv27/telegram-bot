@@ -984,17 +984,23 @@ async def button(update: Update, context):
 
         signal = generate_signal()
 
-        if not signal:
+        current_price = round(
+            get_data("M1", 1)["close"].iloc[-1],
+            5
+    )
 
-            await q.message.reply_text(
-                "❌ No signal\n\n"
-                "Reason:\n"
-                "• weak trend\n"
-                "• low confidence\n"
-                "• flat market"
-)
+    if not signal:
 
-            return
+        await q.message.reply_text(
+            f"❌ No signal\n\n"
+            f"💰 Price: {current_price}\n\n"
+            f"Reason:\n"
+            f"• weak trend\n"
+            f"• low confidence\n"
+            f"• flat market"
+        )
+
+        return
 
         LAST_SIGNAL = signal
 
