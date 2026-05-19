@@ -995,9 +995,9 @@ async def button(update: Update, context):
             and "close" in price_df.columns
         ):
 
-            current_price = round(
-                price_df["close"].iloc[-1],
-                5
+        current_price = round(
+            price_df["close"].iloc[-1],
+            5
             )
 
     except Exception as e:
