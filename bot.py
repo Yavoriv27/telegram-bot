@@ -982,7 +982,7 @@ async def button(update: Update, context):
 
     if q.data == "signal":
 
-    signal = generate_signal()
+        signal = generate_signal()
 
     current_price = "N/A"
 
