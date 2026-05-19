@@ -810,7 +810,7 @@ def generate_signal():
 
     score = 0
 
-    if adx > 22:
+    if adx > 19:
         score += 15
 
     if direction == "BUY":
@@ -893,6 +893,9 @@ def generate_signal():
     score += adaptive_bonus()
 
     confidence = min(score, 99)
+
+    print("FINAL SCORE:", score)
+    print("CONFIDENCE:", confidence)
 
     if confidence < 80:
         return None
