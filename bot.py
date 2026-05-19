@@ -798,7 +798,7 @@ def generate_signal():
 
     score = 0
 
-    if adx > 25:
+    if adx > 22:
         score += 15
 
     if direction == "BUY":
@@ -882,7 +882,7 @@ def generate_signal():
 
     confidence = min(score, 99)
 
-    if confidence < 87:
+    if confidence < 80:
         return None
 
     return {
