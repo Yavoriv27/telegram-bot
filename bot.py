@@ -1194,8 +1194,13 @@ def main():
     print("🚀 QUANT ENGINE RUNNING")
 
     app.run_polling(
-        drop_pending_updates=True
-    )
+         drop_pending_updates=True,
+         timeout=30,
+         read_timeout=30,
+         write_timeout=30,
+         connect_timeout=30,
+         pool_timeout=30
+   )
 
 if __name__ == "__main__":
     main()
