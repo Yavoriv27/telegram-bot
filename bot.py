@@ -811,8 +811,8 @@ def generate_signal():
 
     score = 0
 
-    if adx > 19:
-        score += 15
+    if adx > 22:
+        score += 10
 
     if direction == "BUY":
 
@@ -820,16 +820,16 @@ def generate_signal():
             score += 15
 
         if bos_signal == "BULLISH_BOS":
-            score += 20
-
-        if choch_signal == "BULLISH_CHOCH":
             score += 15
 
+        if choch_signal == "BULLISH_CHOCH":
+            score += 10
+
         if sweep == "BUY_SWEEP":
-            score += 20
+            score += 8
 
         if flow == "BUY":
-            score += 10
+            score += 15
 
         if macd > macd_signal:
             score += 10
@@ -886,18 +886,21 @@ def generate_signal():
     prob = model.predict_proba(feat)[0][1]
 
     if direction == "BUY":
-        score += int(prob * 8)
+        score += int(prob * 15)
     else:
-        score += int((1 - prob) * 8)
+        score += int((1 - prob) * 15)
 
     score += adaptive_bonus()
+    # FLOW має збігатися з напрямком
+    if flow != direction:
+        return None
 
     confidence = min(score, 99)
 
     print("FINAL SCORE:", score)
     print("CONFIDENCE:", confidence)
 
-    if confidence < 72:
+    if confidence < 80:
         return None
 
     return {
