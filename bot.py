@@ -1022,13 +1022,31 @@ async def button(update: Update, context):
 
         LAST_SIGNAL = signal
 
+        structure_text = {
+            "BULLISH": "🧠 Бичачий тренд (↑)",
+            "BEARISH": "🧠 Ведмежий тренд (↓)",
+            "RANGE": "🧠 Боковий рух (↔)"
+        }
+
+        bos_text = {
+            "BULLISH_BOS": "⚡ Пробій вгору (↑)",
+            "BEARISH_BOS": "⚡ Пробій вниз (↓)",
+            None: "⚡ Немає пробою"
+        }
+
+        choch_text = {
+            "BULLISH_CHOCH": "🔄 Розворот вгору (↑)",
+            "BEARISH_CHOCH": "🔄 Розворот вниз (↓)",
+            None: "🔄 Без розвороту"
+        }
+
         msg = (
             f"🔥 EUR/USD QUANT SIGNAL\n\n"
             f"📈 {signal['direction']}\n"
             f"📊 Confidence: {signal['confidence']}%\n"
-            f"🧠 Structure: {signal['structure']}\n"
-            f"⚡ BOS: {signal['bos']}\n"
-            f"🔄 CHOCH: {signal['choch']}\n"
+            f"{structure_text.get(signal['structure'])}\n"
+            f"{bos_text.get(signal['bos'])}\n"
+            f"{choch_text.get(signal['choch'])}\n"
             f"💧 Sweep: {signal['sweep']}\n"
             f"📦 Flow: {signal['flow']}\n"
             f"🌪 Volatility: {signal['volatility']}\n"
