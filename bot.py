@@ -892,8 +892,8 @@ def generate_signal():
 
     score += adaptive_bonus()
     # FLOW має збігатися з напрямком
-    if flow != direction:
-        return None
+    if flow != "NEUTRAL" and flow != direction:
+    return None
 
     confidence = min(score, 99)
 
