@@ -787,7 +787,6 @@ def generate_signal():
     choch_signal = choch(df5)
     sweep = liquidity_sweep(df1)
     flow = orderflow(df1)
-
     liquidity = liquidity_map(df5)
 
     adx = df5["adx"].iloc[-1]
@@ -796,25 +795,7 @@ def generate_signal():
     macd_signal = df5["macd_signal"].iloc[-1]
     volatility = df5["volatility"].iloc[-1]
 
-    # CHOCH FILTER
-
-    if direction == "BUY" and choch_signal == "BEARISH_CHOCH":
-        return None
-
-    if direction == "SELL" and choch_signal == "BULLISH_CHOCH":
-        return None
-
-
-    # RSI FILTER
-
-    if direction == "BUY" and rsi > 75:
-        return None
-
-    if direction == "SELL" and rsi < 25:
-        return None
-
-
-    # CHOCH FILTER
+   # CHOCH FILTER
 
 if direction == "BUY" and choch_signal == "BEARISH_CHOCH":
     return None
