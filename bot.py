@@ -819,13 +819,11 @@ def generate_signal():
 price = df1["close"].iloc[-1]
 ema20_m1 = df1["ema20"].iloc[-1]
 
-    if direction == "BUY":
-
+if direction == "BUY":
     if price > ema20_m1 * 1.0005:
         return None
 
-    if direction == "SELL":
-
+if direction == "SELL":
     if price < ema20_m1 * 0.9995:
         return None
 
