@@ -798,11 +798,36 @@ def generate_signal():
 
     # CHOCH FILTER
 
-     if direction == "BUY" and choch_signal == "BEARISH_CHOCH":
-         return None
+    if direction == "BUY" and choch_signal == "BEARISH_CHOCH":
+        return None
 
-     if direction == "SELL" and choch_signal == "BULLISH_CHOCH":
-         return None
+    if direction == "SELL" and choch_signal == "BULLISH_CHOCH":
+        return None
+
+
+    # RSI FILTER
+
+    if direction == "BUY" and rsi > 75:
+        return None
+
+    if direction == "SELL" and rsi < 25:
+        return None
+
+
+    # LATE ENTRY FILTER
+
+price = df1["close"].iloc[-1]
+ema20_m1 = df1["ema20"].iloc[-1]
+
+    if direction == "BUY":
+
+    if price > ema20_m1 * 1.0005:
+        return None
+
+    if direction == "SELL":
+
+    if price < ema20_m1 * 0.9995:
+        return None
 
     print("========== MARKET DEBUG ==========")
     print("TREND15:", trend15)
@@ -908,7 +933,7 @@ def generate_signal():
     print("FINAL SCORE:", score)
     print("CONFIDENCE:", confidence)
 
-    if confidence < 75:
+    if confidence < 70:
         return None
 
     return {
